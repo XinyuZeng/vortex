@@ -198,7 +198,7 @@ fn nulls(nulls: Option<&NullBuffer>, nullable: bool) -> Validity {
             })
             .unwrap_or_else(|| Validity::AllValid)
     } else {
-        assert!(nulls.is_none());
+        // assert!(nulls.is_none()); // This does not hold for slices
         Validity::NonNullable
     }
 }
