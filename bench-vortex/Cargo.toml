@@ -74,7 +74,9 @@ uuid = { workspace = true, features = ["v4"] }
 vortex = { workspace = true, features = ["object_store", "parquet"] }
 vortex-datafusion = { workspace = true }
 vortex-metrics = { workspace = true }
+vortex-btrblocks = { workspace = true }
 xshell = { workspace = true }
+env_logger = "0.10"
 
 [features]
 jemalloc = ["dep:tikv-jemallocator"]
