@@ -11,19 +11,19 @@ use vortex_array::variants::PrimitiveArrayTrait;
 use vortex_array::{Array, ArrayExt, ArrayRef, ArrayStatistics, ToCanonical};
 use vortex_dict::DictArray;
 use vortex_error::{VortexExpect, VortexResult, VortexUnwrap};
-use vortex_fastlanes::{FoRArray, bitpack_encode, find_best_bit_width};
-use vortex_runend::RunEndArray;
+use vortex_fastlanes::{bitpack_encode, find_best_bit_width, FoRArray};
 use vortex_runend::compress::runend_encode;
+use vortex_runend::RunEndArray;
 use vortex_scalar::Scalar;
 use vortex_sparse::SparseArray;
-use vortex_zigzag::{ZigZagArray, zigzag_encode};
+use vortex_zigzag::{zigzag_encode, ZigZagArray};
 
 use crate::downscale::downscale_integer_array;
 use crate::integer::dictionary::dictionary_encode;
 use crate::patches::compress_patches;
 use crate::{
-    Compressor, CompressorStats, GenerateStatsOptions, Scheme,
-    estimate_compression_ratio_with_sampling,
+    estimate_compression_ratio_with_sampling, Compressor, CompressorStats, GenerateStatsOptions,
+    Scheme,
 };
 
 pub struct IntCompressor;
@@ -173,6 +173,10 @@ impl Scheme for ConstantScheme {
         _allowed_cascading: usize,
         _excludes: &[IntCode],
     ) -> VortexResult<f64> {
+        // if allowed_cascading == 0 {
+        //     return Ok(0.0);
+        // }
+
         // Never yield ConstantScheme for a sample, it could be a false-positive.
         if is_sample {
             return Ok(0.0);
@@ -369,6 +373,10 @@ impl Scheme for BitPackingScheme {
         allowed_cascading: usize,
         excludes: &[IntCode],
     ) -> VortexResult<f64> {
+        // if allowed_cascading == 0 {
+        //     return Ok(0.0);
+        // }
+
         // BitPacking only works for non-negative values
         if stats.typed.min_is_negative() {
             return Ok(0.0);
@@ -460,7 +468,10 @@ impl Scheme for SparseScheme {
         allowed_cascading: usize,
         excludes: &[IntCode],
     ) -> VortexResult<ArrayRef> {
-        assert!(allowed_cascading > 0);
+        // assert!(allowed_cascading > 0);
+        // if allowed_cascading == 0 {
+        //     return Ok(stats.src.clone().into_array());
+        // }
         let (top_pvalue, top_count) = stats.typed.top_value_and_count();
         if top_count as usize == stats.src.len() {
             // top_value is the only value, use ConstantScheme
@@ -682,7 +693,7 @@ mod tests {
     use vortex_array::validity::Validity;
     use vortex_array::vtable::EncodingVTable;
     use vortex_array::{Array, IntoArray, ToCanonical};
-    use vortex_buffer::{Buffer, BufferMut, buffer, buffer_mut};
+    use vortex_buffer::{buffer, buffer_mut, Buffer, BufferMut};
     use vortex_sparse::SparseEncoding;
 
     use crate::integer::{IntCompressor, IntegerStats, SparseScheme};

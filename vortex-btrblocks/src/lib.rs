@@ -242,7 +242,7 @@ pub trait Compressor {
             }
         }
 
-        log::trace!("depth={depth} best scheme = {best_scheme:#?}  ratio = {best_ratio}");
+        log::debug!("depth={depth} best scheme = {best_scheme:#?}  ratio = {best_ratio}");
 
         if let Some(best) = best_scheme {
             Ok(best)

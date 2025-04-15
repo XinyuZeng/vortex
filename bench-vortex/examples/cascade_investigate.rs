@@ -1,3 +1,4 @@
+#![allow(unused_imports)]
 use std::collections::HashSet;
 use std::path::PathBuf;
 
@@ -8,7 +9,7 @@ use vortex::arrays::PrimitiveArray;
 use vortex::error::VortexResult;
 use vortex::nbytes::NBytes;
 use vortex::{ArrayRef, ToCanonical};
-use vortex_btrblocks::integer::{DictScheme, SparseScheme};
+use vortex_btrblocks::integer::SparseScheme;
 use vortex_btrblocks::{Compressor, IntCompressor, Scheme};
 
 #[tokio::main]
@@ -51,7 +52,7 @@ async fn main() {
                         }
                         let cr = cr.unwrap();
 
-                        if cr.cr_3 < cr.cr_1 * 0.4 {
+                        if cr.cr_3 < cr.cr_1 * 0.3 {
                             if columns.contains(&col_idx) {
                                 continue;
                             }
@@ -85,7 +86,8 @@ struct CascadeResult {
 
 // Given a canonical array of integer, return the CR when cascade level is 1 and cascade level is 3.
 fn cr_cascade(array: PrimitiveArray) -> VortexResult<CascadeResult> {
-    let exclude = vec![SparseScheme.code(), DictScheme.code()];
+    let exclude = vec![];
+    // let exclude = vec![SparseScheme.code()];
     let cascade_1_array = IntCompressor::compress(&array, false, 1, &exclude)?;
     let cascade_3_array = IntCompressor::compress(&array, false, 3, &exclude)?;
     let cr_cascade_1 = cascade_1_array.nbytes() as f64 / array.nbytes() as f64;
