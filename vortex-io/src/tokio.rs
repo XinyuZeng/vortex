@@ -68,6 +68,8 @@ impl VortexReadAt for TokioFile {
         pos: u64,
         len: u64,
     ) -> impl Future<Output = io::Result<Bytes>> + 'static {
+        println!("reading size {:?}", len);
+
         let this = self.clone();
 
         let mut buffer =

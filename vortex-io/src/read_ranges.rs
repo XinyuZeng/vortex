@@ -46,6 +46,7 @@ impl<R: VortexReadAt> VortexReadRanges<R> {
                         .dispatch({
                             let reader = reader.clone();
                             move || async move {
+                                println!("reading range {:?}", r);
                                 reader
                                     .read_byte_range(r.start as u64, (r.end - r.start) as u64)
                                     .await
