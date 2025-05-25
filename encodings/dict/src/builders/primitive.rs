@@ -7,7 +7,7 @@ use vortex_array::accessor::ArrayAccessor;
 use vortex_array::aliases::hash_map::{Entry, HashMap};
 use vortex_array::arrays::{NativeValue, PrimitiveArray};
 use vortex_array::validity::Validity;
-use vortex_array::{Array, ArrayRef, ToCanonical};
+use vortex_array::{Array, ArrayRef, IntoArray, ToCanonical};
 use vortex_buffer::BufferMut;
 use vortex_dtype::{NativePType, Nullability, PType};
 use vortex_error::{VortexExpect, VortexResult, vortex_bail, vortex_panic};
@@ -154,7 +154,6 @@ where
 mod test {
     use vortex_array::ToCanonical;
     use vortex_array::arrays::PrimitiveArray;
-    use vortex_array::compute::scalar_at;
     use vortex_dtype::Nullability::Nullable;
     use vortex_scalar::Scalar;
 
@@ -163,7 +162,7 @@ mod test {
     #[test]
     fn encode_primitive() {
         let arr = PrimitiveArray::from_iter([1, 1, 3, 3, 3]);
-        let dict = dict_encode(&arr).unwrap();
+        let dict = dict_encode(arr.as_ref()).unwrap();
         assert_eq!(
             dict.codes().to_primitive().unwrap().as_slice::<u8>(),
             &[0, 0, 1, 1, 1]
@@ -186,18 +185,18 @@ mod test {
             Some(3),
             None,
         ]);
-        let dict = dict_encode(&arr).unwrap();
+        let dict = dict_encode(arr.as_ref()).unwrap();
         assert_eq!(
             dict.codes().to_primitive().unwrap().as_slice::<u8>(),
             &[0, 0, 0, 1, 1, 0, 1, 0]
         );
         let dict_values = dict.values();
         assert_eq!(
-            scalar_at(dict_values, 0).unwrap(),
+            dict_values.scalar_at(0).unwrap(),
             Scalar::primitive(1, Nullable)
         );
         assert_eq!(
-            scalar_at(dict_values, 1).unwrap(),
+            dict_values.scalar_at(1).unwrap(),
             Scalar::primitive(3, Nullable)
         );
     }

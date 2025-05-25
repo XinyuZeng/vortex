@@ -1,40 +1,56 @@
 use std::fmt::Debug;
 
-use arrow_array::{Array, ArrayRef as ArrowArrayRef};
+use arrow_array::ArrayRef as ArrowArrayRef;
 use vortex_dtype::arrow::FromArrowType;
 use vortex_dtype::{DType, Nullability};
-use vortex_error::VortexResult;
+use vortex_error::{VortexResult, vortex_bail};
 use vortex_mask::Mask;
+use vortex_scalar::Scalar;
 
-use crate::arcref::ArcRef;
-use crate::stats::StatsSetRef;
-use crate::vtable::{ComputeVTable, EncodingVTable, VTableRef};
+use crate::arrow::FromArrowArray;
+use crate::stats::{ArrayStats, StatsSetRef};
+use crate::vtable::{
+    ArrayVTable, CanonicalVTable, NotSupported, OperationsVTable, VTable, ValidityVTable,
+    VisitorVTable,
+};
 use crate::{
-    ArrayCanonicalImpl, ArrayImpl, ArrayRef, ArrayStatisticsImpl, ArrayValidityImpl,
-    ArrayVariantsImpl, ArrayVisitorImpl, Canonical, EmptyMetadata, Encoding, EncodingId,
+    Array, ArrayBufferVisitor, ArrayChildVisitor, ArrayRef, Canonical, EncodingId, EncodingRef,
+    IntoArray, vtable,
 };
 
-/// A Vortex array that wraps an in-memory Arrow array.
-#[derive(Debug)]
-pub struct ArrowArrayEncoding;
+vtable!(Arrow);
 
-impl Encoding for ArrowArrayEncoding {
+impl VTable for ArrowVTable {
     type Array = ArrowArray;
-    type Metadata = EmptyMetadata;
-}
+    type Encoding = ArrowEncoding;
+    type ArrayVTable = Self;
+    type CanonicalVTable = Self;
+    type OperationsVTable = Self;
+    type ValidityVTable = Self;
+    type VisitorVTable = Self;
+    type ComputeVTable = NotSupported;
+    type EncodeVTable = NotSupported;
+    type SerdeVTable = NotSupported;
 
-impl EncodingVTable for ArrowArrayEncoding {
-    fn id(&self) -> EncodingId {
-        todo!()
+    fn id(_encoding: &Self::Encoding) -> EncodingId {
+        EncodingId::new_ref("vortex.arrow")
+    }
+
+    fn encoding(_array: &Self::Array) -> EncodingRef {
+        EncodingRef::new_ref(ArrowEncoding.as_ref())
     }
 }
 
-impl ComputeVTable for ArrowArrayEncoding {}
+/// A Vortex array that wraps an in-memory Arrow array.
+// TODO(ngates): consider having each Arrow encoding be a separate encoding ID.
+#[derive(Clone, Debug)]
+pub struct ArrowEncoding;
 
 #[derive(Clone, Debug)]
 pub struct ArrowArray {
     inner: ArrowArrayRef,
     dtype: DType,
+    stats_set: ArrayStats,
 }
 
 impl ArrowArray {
@@ -43,6 +59,7 @@ impl ArrowArray {
         Self {
             inner: arrow_array,
             dtype,
+            stats_set: Default::default(),
         }
     }
 
@@ -51,64 +68,66 @@ impl ArrowArray {
     }
 }
 
-impl ArrayCanonicalImpl for ArrowArray {
-    fn _to_canonical(&self) -> VortexResult<Canonical> {
-        todo!()
+impl ArrayVTable<ArrowVTable> for ArrowVTable {
+    fn len(array: &ArrowArray) -> usize {
+        array.inner.len()
+    }
+
+    fn dtype(array: &ArrowArray) -> &DType {
+        &array.dtype
+    }
+
+    fn stats(array: &ArrowArray) -> StatsSetRef<'_> {
+        array.stats_set.to_ref(array.as_ref())
     }
 }
 
-impl ArrayStatisticsImpl for ArrowArray {
-    fn _stats_ref(&self) -> StatsSetRef<'_> {
-        todo!()
+impl CanonicalVTable<ArrowVTable> for ArrowVTable {
+    fn canonicalize(array: &ArrowArray) -> VortexResult<Canonical> {
+        ArrayRef::from_arrow(array.inner.as_ref(), array.dtype.is_nullable()).to_canonical()
     }
 }
 
-impl ArrayValidityImpl for ArrowArray {
-    fn _is_valid(&self, index: usize) -> VortexResult<bool> {
-        Ok(self.inner.is_valid(index))
+impl OperationsVTable<ArrowVTable> for ArrowVTable {
+    fn slice(array: &ArrowArray, start: usize, stop: usize) -> VortexResult<ArrayRef> {
+        let inner = array.inner.slice(start, stop - start);
+        let new_array = ArrowArray {
+            inner,
+            dtype: array.dtype.clone(),
+            stats_set: Default::default(),
+        };
+        Ok(new_array.into_array())
     }
 
-    fn _all_valid(&self) -> VortexResult<bool> {
-        Ok(self.inner.logical_null_count() == 0)
+    fn scalar_at(_array: &ArrowArray, _index: usize) -> VortexResult<Scalar> {
+        vortex_bail!("Not supported")
+    }
+}
+
+impl ValidityVTable<ArrowVTable> for ArrowVTable {
+    fn is_valid(array: &ArrowArray, index: usize) -> VortexResult<bool> {
+        Ok(array.inner.is_valid(index))
     }
 
-    fn _all_invalid(&self) -> VortexResult<bool> {
-        Ok(self.inner.logical_null_count() == self.inner.len())
+    fn all_valid(array: &ArrowArray) -> VortexResult<bool> {
+        Ok(array.inner.logical_null_count() == 0)
     }
 
-    fn _validity_mask(&self) -> VortexResult<Mask> {
-        Ok(self
+    fn all_invalid(array: &ArrowArray) -> VortexResult<bool> {
+        Ok(array.inner.logical_null_count() == array.inner.len())
+    }
+
+    fn validity_mask(array: &ArrowArray) -> VortexResult<Mask> {
+        Ok(array
             .inner
             .logical_nulls()
             .map(|null_buffer| Mask::from_buffer(null_buffer.inner().clone()))
-            .unwrap_or_else(|| Mask::new_true(self.inner.len())))
+            .unwrap_or_else(|| Mask::new_true(array.inner.len())))
     }
 }
 
-impl ArrayVariantsImpl for ArrowArray {}
+impl VisitorVTable<ArrowVTable> for ArrowVTable {
+    fn visit_buffers(_array: &ArrowArray, _visitor: &mut dyn ArrayBufferVisitor) {}
 
-impl ArrayVisitorImpl<EmptyMetadata> for ArrowArray {
-    fn _metadata(&self) -> EmptyMetadata {
-        EmptyMetadata
-    }
-}
-
-impl ArrayImpl for ArrowArray {
-    type Encoding = ArrowArrayEncoding;
-
-    fn _len(&self) -> usize {
-        self.inner.len()
-    }
-
-    fn _dtype(&self) -> &DType {
-        &self.dtype
-    }
-
-    fn _vtable(&self) -> VTableRef {
-        ArcRef::new_ref(&ArrowArrayEncoding)
-    }
-
-    fn _with_children(&self, _children: &[ArrayRef]) -> VortexResult<Self> {
-        Ok(self.clone())
-    }
+    fn visit_children(_array: &ArrowArray, _visitor: &mut dyn ArrayChildVisitor) {}
 }

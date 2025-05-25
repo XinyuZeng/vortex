@@ -134,7 +134,8 @@ impl PruningPredicate {
     pub fn evaluate(&self, metadata: &dyn Array) -> VortexResult<Option<ArrayRef>> {
         let known_stats = HashSet::from_iter(
             metadata
-                .as_struct_typed()
+                .dtype()
+                .as_struct()
                 .vortex_expect("metadata must be struct array")
                 .names()
                 .iter()
@@ -396,7 +397,7 @@ pub enum FieldOrIdentity {
     Identity,
 }
 
-pub(crate) fn stat_field_name(field: &FieldName, stat: Stat) -> FieldName {
+pub fn stat_field_name(field: &FieldName, stat: Stat) -> FieldName {
     FieldName::from(stat_field_name_string(field, stat))
 }
 
@@ -420,7 +421,7 @@ impl FieldOrIdentity {
 impl Display for FieldOrIdentity {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            FieldOrIdentity::Field(field) => write!(f, "{}", field),
+            FieldOrIdentity::Field(field) => write!(f, "{field}"),
             FieldOrIdentity::Identity => write!(f, "$[]"),
         }
     }

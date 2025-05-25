@@ -7,11 +7,9 @@ use vortex_array::arrays::{
     BoolEncoding, ConstantArray, ListEncoding, PrimitiveEncoding, StructEncoding, VarBinEncoding,
     VarBinViewEncoding,
 };
-use vortex_array::compute::{
-    SearchResult, SearchSortedSide, compare, filter, scalar_at, search_sorted, slice, take,
-};
-use vortex_array::vtable::EncodingVTable;
-use vortex_array::{Array, ArrayRef};
+use vortex_array::compute::{compare, filter, take};
+use vortex_array::search_sorted::{SearchResult, SearchSorted, SearchSortedSide};
+use vortex_array::{Array, ArrayRef, IntoArray};
 use vortex_btrblocks::BtrBlocksCompressor;
 use vortex_error::{VortexUnwrap, vortex_panic};
 use vortex_fuzz::error::{VortexFuzzError, VortexFuzzResult};
@@ -30,7 +28,7 @@ fuzz_target!(|fuzz_action: FuzzArrayAction| -> Corpus {
                 assert_array_eq(&expected.array(), &current_array, i).unwrap();
             }
             Action::Slice(range) => {
-                current_array = slice(&current_array, range.start, range.end).vortex_unwrap();
+                current_array = current_array.slice(range.start, range.end).vortex_unwrap();
                 assert_array_eq(&expected.array(), &current_array, i).unwrap();
             }
             Action::Take(indices) => {
@@ -51,7 +49,7 @@ fuzz_target!(|fuzz_action: FuzzArrayAction| -> Corpus {
                     StructEncoding.id(),
                     ListEncoding.id(),
                 ])
-                .contains(&current_array.encoding())
+                .contains(&current_array.encoding_id())
                 {
                     sorted = BtrBlocksCompressor.compress(&sorted).vortex_unwrap();
                 }
@@ -88,7 +86,7 @@ fn assert_search_sorted(
     expected: SearchResult,
     step: usize,
 ) -> VortexFuzzResult<()> {
-    let search_result = search_sorted(&array, s.clone(), side).vortex_unwrap();
+    let search_result = array.search_sorted(&s, side);
     if search_result != expected {
         Err(VortexFuzzError::SearchSortedError(
             s,
@@ -115,8 +113,8 @@ fn assert_array_eq(lhs: &ArrayRef, rhs: &ArrayRef, step: usize) -> VortexFuzzRes
         ));
     }
     for idx in 0..lhs.len() {
-        let l = scalar_at(lhs, idx).vortex_unwrap();
-        let r = scalar_at(rhs, idx).vortex_unwrap();
+        let l = lhs.scalar_at(idx).vortex_unwrap();
+        let r = rhs.scalar_at(idx).vortex_unwrap();
 
         if l != r {
             return Err(VortexFuzzError::ArrayNotEqual(

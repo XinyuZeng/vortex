@@ -5,6 +5,7 @@ use std::sync::Arc;
 use DType::*;
 use itertools::Itertools;
 use static_assertions::const_assert_eq;
+use vortex_error::vortex_panic;
 
 use crate::decimal::DecimalDType;
 use crate::nullability::Nullability;
@@ -99,6 +100,12 @@ impl DType {
         }
     }
 
+    /// Union the nullability of this dtype with the other nullability, returning a new dtype.
+    pub fn union_nullability(&self, other: Nullability) -> Self {
+        let nullability = self.nullability() | other;
+        self.with_nullability(nullability)
+    }
+
     /// Check if `self` and `other` are equal, ignoring nullability
     pub fn eq_ignore_nullability(&self, other: &Self) -> bool {
         match (self, other) {
@@ -128,24 +135,49 @@ impl DType {
         matches!(self, Struct(_, _))
     }
 
+    /// Check if `self` is a primitive tpye
+    pub fn is_primitive(&self) -> bool {
+        matches!(self, Primitive(_, _))
+    }
+
+    /// Returns this DType's `PType` if it is a primitive type, otherwise panics.
+    pub fn to_ptype(&self) -> PType {
+        match self {
+            Primitive(ptype, _) => *ptype,
+            _ => vortex_panic!("DType is not a primitive type"),
+        }
+    }
+
     /// Check if `self` is an unsigned integer
     pub fn is_unsigned_int(&self) -> bool {
-        PType::try_from(self).is_ok_and(PType::is_unsigned_int)
+        if let Primitive(ptype, _) = self {
+            return ptype.is_unsigned_int();
+        }
+        false
     }
 
     /// Check if `self` is a signed integer
     pub fn is_signed_int(&self) -> bool {
-        PType::try_from(self).is_ok_and(PType::is_signed_int)
+        if let Primitive(ptype, _) = self {
+            return ptype.is_signed_int();
+        }
+        false
     }
 
     /// Check if `self` is an integer (signed or unsigned)
     pub fn is_int(&self) -> bool {
-        PType::try_from(self).is_ok_and(PType::is_int)
+        if let Primitive(ptype, _) = self {
+            return ptype.is_int();
+        }
+        false
     }
 
     /// Check if `self` is a floating point number
     pub fn is_float(&self) -> bool {
-        PType::try_from(self).is_ok_and(PType::is_float)
+        if let Primitive(ptype, _) = self {
+            return ptype.is_float();
+        }
+        false
     }
 
     /// Check if `self` is a boolean
@@ -202,22 +234,22 @@ impl Display for DType {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Null => write!(f, "null"),
-            Bool(n) => write!(f, "bool{}", n),
-            Primitive(pt, n) => write!(f, "{}{}", pt, n),
-            Decimal(dt, n) => write!(f, "decimal({},{}){}", dt.precision(), dt.scale(), n),
-            Utf8(n) => write!(f, "utf8{}", n),
-            Binary(n) => write!(f, "binary{}", n),
+            Bool(n) => write!(f, "bool{n}"),
+            Primitive(pt, n) => write!(f, "{pt}{n}"),
+            Decimal(dt, n) => write!(f, "{dt}{n}"),
+            Utf8(n) => write!(f, "utf8{n}"),
+            Binary(n) => write!(f, "binary{n}"),
             Struct(sdt, n) => write!(
                 f,
                 "{{{}}}{}",
                 sdt.names()
                     .iter()
                     .zip(sdt.fields())
-                    .map(|(n, dt)| format!("{}={}", n, dt))
+                    .map(|(n, dt)| format!("{n}={dt}"))
                     .join(", "),
                 n
             ),
-            List(edt, n) => write!(f, "list({}){}", edt, n),
+            List(edt, n) => write!(f, "list({edt}){n}"),
             Extension(ext) => write!(
                 f,
                 "ext({}, {}{}){}",
@@ -225,7 +257,7 @@ impl Display for DType {
                 ext.storage_dtype()
                     .with_nullability(Nullability::NonNullable),
                 ext.metadata()
-                    .map(|m| format!(", {:?}", m))
+                    .map(|m| format!(", {m:?}"))
                     .unwrap_or_else(|| "".to_string()),
                 ext.storage_dtype().nullability(),
             ),

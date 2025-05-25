@@ -5,92 +5,41 @@ mod is_constant;
 mod is_sorted;
 mod like;
 mod min_max;
-mod optimize;
 
 use vortex_array::compute::{
-    FillNullFn, FilterKernel, FilterKernelAdapter, IsSortedFn, LikeFn, MinMaxFn, OptimizeFn,
-    ScalarAtFn, SliceFn, TakeFn, filter, scalar_at, slice, take,
+    FilterKernel, FilterKernelAdapter, TakeKernel, TakeKernelAdapter, filter, take,
 };
-use vortex_array::vtable::ComputeVTable;
-use vortex_array::{Array, ArrayRef, register_kernel};
+use vortex_array::{Array, ArrayRef, IntoArray, register_kernel};
 use vortex_error::VortexResult;
 use vortex_mask::Mask;
-use vortex_scalar::Scalar;
 
-use crate::{DictArray, DictEncoding};
+use crate::{DictArray, DictVTable};
 
-impl ComputeVTable for DictEncoding {
-    fn fill_null_fn(&self) -> Option<&dyn FillNullFn<&dyn Array>> {
-        Some(self)
-    }
-
-    fn is_sorted_fn(&self) -> Option<&dyn IsSortedFn<&dyn Array>> {
-        Some(self)
-    }
-
-    fn like_fn(&self) -> Option<&dyn LikeFn<&dyn Array>> {
-        Some(self)
-    }
-
-    fn optimize_fn(&self) -> Option<&dyn OptimizeFn<&dyn Array>> {
-        Some(self)
-    }
-
-    fn scalar_at_fn(&self) -> Option<&dyn ScalarAtFn<&dyn Array>> {
-        Some(self)
-    }
-
-    fn slice_fn(&self) -> Option<&dyn SliceFn<&dyn Array>> {
-        Some(self)
-    }
-
-    fn take_fn(&self) -> Option<&dyn TakeFn<&dyn Array>> {
-        Some(self)
-    }
-
-    fn min_max_fn(&self) -> Option<&dyn MinMaxFn<&dyn Array>> {
-        Some(self)
-    }
-}
-
-impl ScalarAtFn<&DictArray> for DictEncoding {
-    fn scalar_at(&self, array: &DictArray, index: usize) -> VortexResult<Scalar> {
-        let dict_index: usize = scalar_at(array.codes(), index)?.as_ref().try_into()?;
-        scalar_at(array.values(), dict_index)
-    }
-}
-
-impl TakeFn<&DictArray> for DictEncoding {
+impl TakeKernel for DictVTable {
     fn take(&self, array: &DictArray, indices: &dyn Array) -> VortexResult<ArrayRef> {
         let codes = take(array.codes(), indices)?;
         DictArray::try_new(codes, array.values().clone()).map(|a| a.into_array())
     }
 }
 
-impl FilterKernel for DictEncoding {
+register_kernel!(TakeKernelAdapter(DictVTable).lift());
+
+impl FilterKernel for DictVTable {
     fn filter(&self, array: &DictArray, mask: &Mask) -> VortexResult<ArrayRef> {
         let codes = filter(array.codes(), mask)?;
         DictArray::try_new(codes, array.values().clone()).map(|a| a.into_array())
     }
 }
 
-register_kernel!(FilterKernelAdapter(DictEncoding).lift());
-
-impl SliceFn<&DictArray> for DictEncoding {
-    // TODO(robert): Add function to trim the dictionary
-    fn slice(&self, array: &DictArray, start: usize, stop: usize) -> VortexResult<ArrayRef> {
-        DictArray::try_new(slice(array.codes(), start, stop)?, array.values().clone())
-            .map(|a| a.into_array())
-    }
-}
+register_kernel!(FilterKernelAdapter(DictVTable).lift());
 
 #[cfg(test)]
 mod test {
     use vortex_array::accessor::ArrayAccessor;
     use vortex_array::arrays::{ConstantArray, PrimitiveArray, VarBinArray, VarBinViewArray};
     use vortex_array::compute::conformance::mask::test_mask;
-    use vortex_array::compute::{Operator, compare, scalar_at, slice};
-    use vortex_array::{Array, ArrayRef, ToCanonical};
+    use vortex_array::compute::{Operator, compare};
+    use vortex_array::{Array, ArrayRef, IntoArray, ToCanonical};
     use vortex_dtype::{DType, Nullability};
     use vortex_scalar::Scalar;
 
@@ -107,7 +56,7 @@ mod test {
             })
             .collect();
 
-        let dict = dict_encode(&PrimitiveArray::from_option_iter(values.clone())).unwrap();
+        let dict = dict_encode(PrimitiveArray::from_option_iter(values.clone()).as_ref()).unwrap();
         let actual = dict.to_primitive().unwrap();
 
         let expected: Vec<i32> = (0..65)
@@ -134,7 +83,8 @@ mod test {
         let unique_values: Vec<i32> = (0..32).collect();
         let expected: Vec<i32> = (0..1000).map(|i| unique_values[i % 32]).collect();
 
-        let dict = dict_encode(&PrimitiveArray::from_iter(expected.iter().copied())).unwrap();
+        let dict =
+            dict_encode(PrimitiveArray::from_iter(expected.iter().copied()).as_ref()).unwrap();
         let actual = dict.to_primitive().unwrap();
 
         assert_eq!(actual.as_slice::<i32>(), expected.as_slice());
@@ -145,7 +95,8 @@ mod test {
         let unique_values: Vec<i32> = (0..100).collect();
         let expected: Vec<i32> = (0..1000).map(|i| unique_values[i % 100]).collect();
 
-        let dict = dict_encode(&PrimitiveArray::from_iter(expected.iter().copied())).unwrap();
+        let dict =
+            dict_encode(PrimitiveArray::from_iter(expected.iter().copied()).as_ref()).unwrap();
         let actual = dict.to_primitive().unwrap();
 
         assert_eq!(actual.as_slice::<i32>(), expected.as_slice());
@@ -158,7 +109,7 @@ mod test {
             DType::Utf8(Nullability::Nullable),
         );
         assert_eq!(reference.len(), 6);
-        let dict = dict_encode(&reference).unwrap();
+        let dict = dict_encode(reference.as_ref()).unwrap();
         let flattened_dict = dict.to_varbinview().unwrap();
         assert_eq!(
             flattened_dict
@@ -183,25 +134,25 @@ mod test {
             Some(1),
             Some(5),
         ]);
-        let dict = dict_encode(&reference).unwrap();
-        slice(&dict, 1, 4).unwrap()
+        let dict = dict_encode(reference.as_ref()).unwrap();
+        dict.slice(1, 4).unwrap()
     }
 
     #[test]
     fn compare_sliced_dict() {
         let sliced = sliced_dict_array();
-        let compared = compare(&sliced, &ConstantArray::new(42, 3), Operator::Eq).unwrap();
+        let compared = compare(&sliced, ConstantArray::new(42, 3).as_ref(), Operator::Eq).unwrap();
 
         assert_eq!(
-            scalar_at(&compared, 0).unwrap(),
+            compared.scalar_at(0).unwrap(),
             Scalar::bool(false, Nullability::Nullable)
         );
         assert_eq!(
-            scalar_at(&compared, 1).unwrap(),
+            compared.scalar_at(1).unwrap(),
             Scalar::null(DType::Bool(Nullability::Nullable))
         );
         assert_eq!(
-            scalar_at(&compared, 2).unwrap(),
+            compared.scalar_at(2).unwrap(),
             Scalar::bool(true, Nullability::Nullable)
         );
     }
@@ -209,14 +160,13 @@ mod test {
     #[test]
     fn test_mask_dict_array() {
         let array = dict_encode(&PrimitiveArray::from_iter([2, 0, 2, 0, 10]).into_array()).unwrap();
-        test_mask(&array);
+        test_mask(array.as_ref());
 
         let array = dict_encode(
-            &PrimitiveArray::from_option_iter([Some(2), None, Some(2), Some(0), Some(10)])
-                .into_array(),
+            PrimitiveArray::from_option_iter([Some(2), None, Some(2), Some(0), Some(10)]).as_ref(),
         )
         .unwrap();
-        test_mask(&array);
+        test_mask(array.as_ref());
 
         let array = dict_encode(
             &VarBinArray::from_iter(
@@ -232,6 +182,6 @@ mod test {
             .into_array(),
         )
         .unwrap();
-        test_mask(&array);
+        test_mask(array.as_ref());
     }
 }

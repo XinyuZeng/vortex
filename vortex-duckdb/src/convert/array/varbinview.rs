@@ -5,7 +5,6 @@ use duckdb::ffi::{
 };
 use duckdb::vtab::arrow::WritableVector;
 use itertools::Itertools;
-use vortex_array::Array;
 use vortex_array::arrays::{BinaryView, Inlined, VarBinViewArray};
 use vortex_buffer::ByteBuffer;
 use vortex_error::VortexResult;
@@ -131,9 +130,8 @@ impl ToDuckDB for VarBinViewArray {
 #[cfg(test)]
 mod tests {
     use duckdb::core::{DataChunkHandle, LogicalTypeHandle, LogicalTypeId};
+    use vortex_array::ToCanonical;
     use vortex_array::arrays::{ConstantArray, VarBinViewArray};
-    use vortex_array::compute::slice;
-    use vortex_array::{Array, ToCanonical};
 
     use crate::ToDuckDB;
     use crate::convert::array::ConversionCache;
@@ -154,7 +152,7 @@ mod tests {
         chunk.set_len(len);
         chunk.verify();
         assert_eq!(
-            format!("{:?}", chunk),
+            format!("{chunk:?}"),
             r#"Chunk - [1 Columns]
 - CONSTANT VARCHAR: 100 = [ ]
 "#
@@ -179,7 +177,7 @@ mod tests {
         chunk.set_len(len);
         chunk.verify();
         assert_eq!(
-            format!("{:?}", chunk),
+            format!("{chunk:?}"),
             r#"Chunk - [1 Columns]
 - CONSTANT VARCHAR: 100 = [ long string 100000000000000000000000000000000000000000000000000000000000]
 "#
@@ -191,7 +189,7 @@ mod tests {
     fn test_multi_buffer_ref() {
         let varbin = VarBinViewArray::from_iter_str(["a", "ab", "abc", "abcd", "abcde"]);
         {
-            let start_view = slice(&varbin, 0, 2).unwrap().to_varbinview().unwrap();
+            let start_view = varbin.slice(0, 2).unwrap().to_varbinview().unwrap();
             let mut chunk =
                 DataChunkHandle::new(&[LogicalTypeHandle::from(LogicalTypeId::Varchar)]);
             chunk.set_len(start_view.len());
@@ -204,7 +202,7 @@ mod tests {
 
             chunk.verify();
             assert_eq!(
-                format!("{:?}", chunk),
+                format!("{chunk:?}"),
                 r#"Chunk - [1 Columns]
 - FLAT VARCHAR: 2 = [ a, ab]
 "#
@@ -212,7 +210,7 @@ mod tests {
             drop(chunk)
         }
         {
-            let end_view = slice(&varbin, 2, 5).unwrap().to_varbinview().unwrap();
+            let end_view = varbin.slice(2, 5).unwrap().to_varbinview().unwrap();
             drop(varbin);
             let mut chunk =
                 DataChunkHandle::new(&[LogicalTypeHandle::from(LogicalTypeId::Varchar)]);
@@ -227,7 +225,7 @@ mod tests {
 
             chunk.verify();
             assert_eq!(
-                format!("{:?}", chunk),
+                format!("{chunk:?}"),
                 r#"Chunk - [1 Columns]
 - FLAT VARCHAR: 3 = [ abc, abcd, abcde]
 "#

@@ -12,7 +12,6 @@ use super::{
 use crate::Array;
 use crate::compute::{
     MinMaxResult, is_constant, is_sorted, is_strict_sorted, min_max, nan_count, sum,
-    uncompressed_size,
 };
 
 /// A shared [`StatsSet`] stored in an array. Can be shared by copies of the array and can also be mutated in place.
@@ -23,6 +22,8 @@ pub struct ArrayStats {
 }
 
 /// Reference to an array's [`StatsSet`]. Can be used to get and mutate the underlying stats.
+///
+/// Constructed by calling [`ArrayStats::to_ref`].
 pub struct StatsSetRef<'a> {
     // We need to reference back to the array
     dyn_array_ref: &'a dyn Array,
@@ -133,16 +134,31 @@ impl StatsSetRef<'_> {
             }
             Stat::IsSorted => Some(is_sorted(self.dyn_array_ref)?.into()),
             Stat::IsStrictSorted => Some(is_strict_sorted(self.dyn_array_ref)?.into()),
-            Stat::UncompressedSizeInBytes => Some(uncompressed_size(self.dyn_array_ref)?.into()),
-            Stat::NaNCount => Some(nan_count(self.dyn_array_ref)?.into()),
+            Stat::UncompressedSizeInBytes => {
+                let nbytes: ScalarValue =
+                    (self.dyn_array_ref.to_canonical()?.as_ref().nbytes() as u64).into();
+                self.set(stat, Precision::exact(nbytes.clone()));
+                Some(nbytes)
+            }
+            Stat::NaNCount => {
+                Stat::NaNCount
+                    .dtype(self.dyn_array_ref.dtype())
+                    .is_some()
+                    .then(|| {
+                        // NaNCount is supported for this dtype.
+                        nan_count(self.dyn_array_ref)
+                    })
+                    .transpose()?
+                    .map(|s| s.into())
+            }
         })
     }
 
     pub fn compute_all(&self, stats: &[Stat]) -> VortexResult<StatsSet> {
         let mut stats_set = StatsSet::default();
-        for stat in stats {
-            if let Some(s) = self.compute_stat(*stat)? {
-                stats_set.set(*stat, Precision::exact(s))
+        for &stat in stats {
+            if let Some(s) = self.compute_stat(stat)? {
+                stats_set.set(stat, Precision::exact(s))
             }
         }
         Ok(stats_set)
@@ -170,7 +186,7 @@ impl StatsSetRef<'_> {
         stat: Stat,
     ) -> Option<U> {
         self.compute_stat(stat)
-            .inspect_err(|e| log::warn!("Failed to compute stat {}: {}", stat, e))
+            .inspect_err(|e| log::warn!("Failed to compute stat {stat}: {e}"))
             .ok()
             .flatten()
             .map(|s| U::try_from(&s))

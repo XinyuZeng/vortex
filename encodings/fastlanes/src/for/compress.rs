@@ -1,8 +1,8 @@
 use num_traits::{PrimInt, WrappingAdd, WrappingSub};
 use vortex_array::arrays::PrimitiveArray;
 use vortex_array::stats::Stat;
-use vortex_array::variants::PrimitiveArrayTrait;
-use vortex_array::{Array, ToCanonical};
+use vortex_array::vtable::ValidityHelper;
+use vortex_array::{IntoArray, ToCanonical};
 use vortex_buffer::{Buffer, BufferMut};
 use vortex_dtype::{NativePType, match_each_integer_ptype};
 use vortex_error::{VortexResult, vortex_err};
@@ -78,7 +78,6 @@ fn decompress_primitive<T: NativePType + WrappingAdd + PrimInt>(
 mod test {
     use itertools::Itertools;
     use vortex_array::ToCanonical;
-    use vortex_array::compute::scalar_at;
     use vortex_array::validity::Validity;
     use vortex_buffer::buffer;
 
@@ -149,7 +148,7 @@ mod test {
             .for_each(|(i, v)| {
                 assert_eq!(
                     *v,
-                    i8::try_from(scalar_at(&compressed, i).unwrap().as_ref()).unwrap()
+                    i8::try_from(compressed.scalar_at(i).unwrap().as_ref()).unwrap()
                 );
             });
     }

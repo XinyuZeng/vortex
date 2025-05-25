@@ -3,16 +3,18 @@ use vortex_dtype::DType;
 use vortex_error::VortexResult;
 use vortex_scalar::Scalar;
 
-use crate::Array;
 use crate::accessor::ArrayAccessor;
-use crate::arrays::{VarBinArray, VarBinEncoding};
-use crate::compute::{MinMaxFn, MinMaxResult};
+use crate::arrays::{VarBinArray, VarBinVTable};
+use crate::compute::{MinMaxKernel, MinMaxKernelAdapter, MinMaxResult};
+use crate::register_kernel;
 
-impl MinMaxFn<&VarBinArray> for VarBinEncoding {
+impl MinMaxKernel for VarBinVTable {
     fn min_max(&self, array: &VarBinArray) -> VortexResult<Option<MinMaxResult>> {
         compute_min_max(array, array.dtype())
     }
 }
+
+register_kernel!(MinMaxKernelAdapter(VarBinVTable).lift());
 
 /// Compute the min and max of VarBin like array.
 pub fn compute_min_max<T: ArrayAccessor<[u8]>>(
@@ -58,7 +60,6 @@ mod tests {
     use vortex_dtype::Nullability::Nullable;
     use vortex_scalar::Scalar;
 
-    use crate::Array;
     use crate::arrays::VarBinArray;
     use crate::compute::{MinMaxResult, min_max};
     use crate::stats::{Stat, StatsProvider};
@@ -74,7 +75,7 @@ mod tests {
             ],
             Utf8(Nullable),
         );
-        let MinMaxResult { min, max } = min_max(&array).unwrap().unwrap();
+        let MinMaxResult { min, max } = min_max(array.as_ref()).unwrap().unwrap();
 
         assert_eq!(
             min,

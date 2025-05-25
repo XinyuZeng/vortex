@@ -1,20 +1,42 @@
-use fsst::{Decompressor, Symbol};
+use std::fmt::{Debug, Formatter};
+use std::sync::{Arc, LazyLock};
+
+use fsst::{Compressor, Decompressor, Symbol};
 use vortex_array::arrays::VarBinArray;
 use vortex_array::stats::{ArrayStats, StatsSetRef};
-use vortex_array::variants::{BinaryArrayTrait, Utf8ArrayTrait};
-use vortex_array::vtable::VTableRef;
-use vortex_array::{
-    Array, ArrayImpl, ArrayRef, ArrayStatisticsImpl, ArrayValidityImpl, ArrayVariantsImpl,
-    Encoding, ProstMetadata,
+use vortex_array::vtable::{
+    ArrayVTable, NotSupported, VTable, ValidityChild, ValidityVTableFromChild,
 };
+use vortex_array::{Array, ArrayRef, EncodingId, EncodingRef, vtable};
 use vortex_buffer::Buffer;
 use vortex_dtype::DType;
-use vortex_error::{VortexResult, vortex_bail, vortex_err};
-use vortex_mask::Mask;
+use vortex_error::{VortexResult, vortex_bail};
 
-use crate::serde::FSSTMetadata;
+vtable!(FSST);
 
-#[derive(Clone, Debug)]
+impl VTable for FSSTVTable {
+    type Array = FSSTArray;
+    type Encoding = FSSTEncoding;
+
+    type ArrayVTable = Self;
+    type CanonicalVTable = Self;
+    type OperationsVTable = Self;
+    type ValidityVTable = ValidityVTableFromChild;
+    type VisitorVTable = Self;
+    type ComputeVTable = NotSupported;
+    type EncodeVTable = Self;
+    type SerdeVTable = Self;
+
+    fn id(_encoding: &Self::Encoding) -> EncodingId {
+        EncodingId::new_ref("vortex.fsst")
+    }
+
+    fn encoding(_array: &Self::Array) -> EncodingRef {
+        EncodingRef::new_ref(FSSTEncoding.as_ref())
+    }
+}
+
+#[derive(Clone)]
 pub struct FSSTArray {
     dtype: DType,
     symbols: Buffer<Symbol>,
@@ -23,14 +45,25 @@ pub struct FSSTArray {
     /// Lengths of the original values before compression, can be compressed.
     uncompressed_lengths: ArrayRef,
     stats_set: ArrayStats,
+
+    /// Memoized compressor used for push-down of compute by compressing the RHS.
+    compressor: Arc<LazyLock<Compressor, Box<dyn Fn() -> Compressor + Send>>>,
 }
 
-#[derive(Debug)]
-pub struct FSSTEncoding;
-impl Encoding for FSSTEncoding {
-    type Array = FSSTArray;
-    type Metadata = ProstMetadata<FSSTMetadata>;
+impl Debug for FSSTArray {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FSSTArray")
+            .field("dtype", &self.dtype)
+            .field("symbols", &self.symbols)
+            .field("symbol_lengths", &self.symbol_lengths)
+            .field("codes", &self.codes)
+            .field("uncompressed_lengths", &self.uncompressed_lengths)
+            .finish()
+    }
 }
+
+#[derive(Clone, Debug)]
+pub struct FSSTEncoding;
 
 impl FSSTArray {
     /// Build an FSST array from a set of `symbols` and `codes`.
@@ -69,6 +102,13 @@ impl FSSTArray {
             vortex_bail!(InvalidArgument: "codes array must be DType::Binary type");
         }
 
+        let symbols2 = symbols.clone();
+        let symbol_lengths2 = symbol_lengths.clone();
+        let compressor = Arc::new(LazyLock::new(Box::new(move || {
+            Compressor::rebuild_from(symbols2.as_slice(), symbol_lengths2.as_slice())
+        })
+            as Box<dyn Fn() -> Compressor + Send>));
+
         Ok(Self {
             dtype,
             symbols,
@@ -76,6 +116,7 @@ impl FSSTArray {
             codes,
             uncompressed_lengths,
             stats_set: Default::default(),
+            compressor,
         })
     }
 
@@ -118,75 +159,28 @@ impl FSSTArray {
     pub(crate) fn decompressor(&self) -> Decompressor {
         Decompressor::new(self.symbols().as_slice(), self.symbol_lengths().as_slice())
     }
-}
 
-impl ArrayImpl for FSSTArray {
-    type Encoding = FSSTEncoding;
-
-    fn _len(&self) -> usize {
-        self.codes.len()
-    }
-
-    fn _dtype(&self) -> &DType {
-        &self.dtype
-    }
-
-    fn _vtable(&self) -> VTableRef {
-        VTableRef::new_ref(&FSSTEncoding)
-    }
-
-    fn _with_children(&self, children: &[ArrayRef]) -> VortexResult<Self> {
-        let codes = children[0]
-            .as_any()
-            .downcast_ref::<VarBinArray>()
-            .ok_or_else(|| vortex_err!("FSSTArray codes must be a VarBinArray"))?
-            .clone();
-        let uncompressed_lengths = children[1].clone();
-
-        Self::try_new(
-            self.dtype().clone(),
-            self.symbols().clone(),
-            self.symbol_lengths().clone(),
-            codes,
-            uncompressed_lengths,
-        )
+    pub(crate) fn compressor(&self) -> &Compressor {
+        self.compressor.as_ref()
     }
 }
 
-impl ArrayStatisticsImpl for FSSTArray {
-    fn _stats_ref(&self) -> StatsSetRef<'_> {
-        self.stats_set.to_ref(self)
+impl ArrayVTable<FSSTVTable> for FSSTVTable {
+    fn len(array: &FSSTArray) -> usize {
+        array.codes().len()
+    }
+
+    fn dtype(array: &FSSTArray) -> &DType {
+        &array.dtype
+    }
+
+    fn stats(array: &FSSTArray) -> StatsSetRef<'_> {
+        array.stats_set.to_ref(array.as_ref())
     }
 }
 
-impl ArrayValidityImpl for FSSTArray {
-    fn _is_valid(&self, index: usize) -> VortexResult<bool> {
-        self.codes().is_valid(index)
-    }
-
-    fn _all_valid(&self) -> VortexResult<bool> {
-        self.codes().all_valid()
-    }
-
-    fn _all_invalid(&self) -> VortexResult<bool> {
-        self.codes().all_invalid()
-    }
-
-    fn _validity_mask(&self) -> VortexResult<Mask> {
-        self.codes().validity_mask()
+impl ValidityChild<FSSTVTable> for FSSTVTable {
+    fn validity_child(array: &FSSTArray) -> &dyn Array {
+        array.codes().as_ref()
     }
 }
-
-impl ArrayVariantsImpl for FSSTArray {
-    fn _as_utf8_typed(&self) -> Option<&dyn Utf8ArrayTrait> {
-        Some(self)
-    }
-
-    fn _as_binary_typed(&self) -> Option<&dyn BinaryArrayTrait> {
-        Some(self)
-    }
-}
-
-impl Utf8ArrayTrait for FSSTArray {}
-
-impl BinaryArrayTrait for FSSTArray {}

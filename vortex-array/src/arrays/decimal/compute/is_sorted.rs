@@ -1,11 +1,13 @@
+use itertools::Itertools;
 use vortex_error::VortexResult;
 use vortex_mask::Mask;
+use vortex_scalar::{NativeDecimalType, match_each_decimal_value_type};
 
-use crate::arrays::{DecimalArray, DecimalEncoding, NativeDecimalType};
-use crate::compute::{IsSortedFn, IsSortedIteratorExt};
-use crate::{Array, match_each_decimal_value_type};
+use crate::arrays::{DecimalArray, DecimalVTable};
+use crate::compute::{IsSortedIteratorExt, IsSortedKernel, IsSortedKernelAdapter};
+use crate::register_kernel;
 
-impl IsSortedFn<&DecimalArray> for DecimalEncoding {
+impl IsSortedKernel for DecimalVTable {
     fn is_sorted(&self, array: &DecimalArray) -> VortexResult<bool> {
         is_decimal_sorted(array, false)
     }
@@ -14,6 +16,8 @@ impl IsSortedFn<&DecimalArray> for DecimalEncoding {
         is_decimal_sorted(array, true)
     }
 }
+
+register_kernel!(IsSortedKernelAdapter(DecimalVTable).lift());
 
 fn is_decimal_sorted(array: &DecimalArray, strict: bool) -> VortexResult<bool> {
     match_each_decimal_value_type!(array.values_type, |$S| {
@@ -38,12 +42,12 @@ where
             })
         }
         Mask::Values(mask_values) => {
-            let buf = array.buffer::<T>();
-
+            let values = array.buffer::<T>();
             let iter = mask_values
                 .boolean_buffer()
-                .set_indices()
-                .map(|idx| buf[idx]);
+                .iter()
+                .zip_eq(values)
+                .map(|(is_valid, v)| is_valid.then_some(v));
 
             Ok(if strict {
                 IsSortedIteratorExt::is_strict_sorted(iter)
@@ -56,6 +60,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use arrow_array::types::Decimal128Type;
+    use arrow_cast::parse::parse_decimal;
     use vortex_buffer::buffer;
     use vortex_dtype::DecimalDType;
 
@@ -65,29 +71,41 @@ mod tests {
 
     #[test]
     fn test_is_sorted() {
-        let sorted = buffer![100i128, 200i128, 200i128];
-        let unsorted = buffer![200i128, 100i128, 200i128];
-
         let dtype = DecimalDType::new(19, 2);
+        let i100 =
+            parse_decimal::<Decimal128Type>("100.00", dtype.precision(), dtype.scale()).unwrap();
+        let i200 =
+            parse_decimal::<Decimal128Type>("200.00", dtype.precision(), dtype.scale()).unwrap();
+
+        let sorted = buffer![i100, i200, i200];
+        let unsorted = buffer![i200, i100, i200];
 
         let sorted_array = DecimalArray::new(sorted, dtype, Validity::NonNullable);
         let unsorted_array = DecimalArray::new(unsorted, dtype, Validity::NonNullable);
 
-        assert!(is_sorted(&sorted_array).unwrap());
-        assert!(!is_sorted(&unsorted_array).unwrap());
+        assert!(is_sorted(sorted_array.as_ref()).unwrap());
+        assert!(!is_sorted(unsorted_array.as_ref()).unwrap());
     }
 
     #[test]
     fn test_is_strict_sorted() {
-        let strict_sorted = buffer![100i128, 200i128, 300i128];
-        let sorted = buffer![100i128, 200i128, 200i128];
+        let dtype = DecimalDType::new(19, 2);
+        let i100 =
+            parse_decimal::<Decimal128Type>("100.00", dtype.precision(), dtype.scale()).unwrap();
+        let i200 =
+            parse_decimal::<Decimal128Type>("200.00", dtype.precision(), dtype.scale()).unwrap();
+        let i300 =
+            parse_decimal::<Decimal128Type>("300.00", dtype.precision(), dtype.scale()).unwrap();
+
+        let strict_sorted = buffer![i100, i200, i300];
+        let sorted = buffer![i100, i200, i200];
 
         let dtype = DecimalDType::new(19, 2);
 
         let strict_sorted_array = DecimalArray::new(strict_sorted, dtype, Validity::NonNullable);
         let sorted_array = DecimalArray::new(sorted, dtype, Validity::NonNullable);
 
-        assert!(is_strict_sorted(&strict_sorted_array).unwrap());
-        assert!(!is_strict_sorted(&sorted_array).unwrap());
+        assert!(is_strict_sorted(strict_sorted_array.as_ref()).unwrap());
+        assert!(!is_strict_sorted(sorted_array.as_ref()).unwrap());
     }
 }

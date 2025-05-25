@@ -20,7 +20,6 @@ use indicatif::ProgressBar;
 use itertools::Itertools;
 use log::warn;
 use prelude::SessionContext;
-use tempfile::{TempDir, tempdir};
 use tokio::runtime::Runtime;
 use tracing::{debug, info_span};
 use tracing_futures::Instrument;
@@ -71,6 +70,8 @@ struct Args {
     hide_progress_bar: bool,
     #[arg(long, default_value_t = false)]
     show_metrics: bool,
+    #[arg(long)]
+    skip_duckdb_build: bool,
 }
 
 struct DataFusionCtx {
@@ -87,15 +88,13 @@ struct DataFusionCtx {
 
 struct DuckDBCtx {
     duckdb_path: PathBuf,
-    tmp_dir: TempDir,
 }
 
 impl DuckDBCtx {
     pub fn duckdb_file(&self, format: Format) -> PathBuf {
-        self.tmp_dir
-            .path()
-            .to_path_buf()
-            .join(format!("hits-{format}.db"))
+        let dir = Path::new("bench-vortex/data/duckdb");
+        std::fs::create_dir_all(dir).vortex_expect("failed to create duckdb data dir");
+        dir.join(format!("{format}.db"))
     }
 }
 
@@ -117,7 +116,6 @@ impl EngineCtx {
     fn new_with_duckdb(duckdb_path: &Path) -> Self {
         EngineCtx::DuckDB(DuckDBCtx {
             duckdb_path: duckdb_path.to_path_buf(),
-            tmp_dir: tempdir().vortex_expect("cannot open temp directory"),
         })
     }
 
@@ -208,7 +206,14 @@ fn main() -> anyhow::Result<()> {
         .targets
         .iter()
         .any(|t| t.engine() == Engine::DuckDB)
-        .then(|| ddb::build_and_get_executable_path(&args.duckdb_path, false));
+        .then(|| {
+            let path = ddb::duckdb_executable_path(&args.duckdb_path);
+            // If the path is to the duckdb-vortex extension, try to rebuild
+            if args.duckdb_path.is_none() && !args.skip_duckdb_build {
+                ddb::build_vortex_duckdb();
+            }
+            path
+        });
 
     for target in args.targets.iter() {
         let engine = target.engine();
@@ -230,13 +235,12 @@ fn main() -> anyhow::Result<()> {
 
         let tokio_runtime = new_tokio_runtime(args.threads);
 
-        init_data_source(
+        tokio_runtime.block_on(init_data_source(
             file_format,
             &base_url,
             args.single_file,
             &engine_ctx,
-            &tokio_runtime,
-        )?;
+        ))?;
 
         let bench_measurements = execute_queries(
             &queries,
@@ -325,7 +329,7 @@ fn print_results(
 fn data_source_base_url(remote_data_dir: &Option<String>, flavor: Flavor) -> anyhow::Result<Url> {
     match remote_data_dir {
         None => {
-            let basepath = format!("clickbench_{}", flavor).to_data_path();
+            let basepath = format!("clickbench_{flavor}").to_data_path();
             let client = reqwest::blocking::Client::default();
 
             flavor.download(&client, basepath.as_path())?;
@@ -357,12 +361,11 @@ fn data_source_base_url(remote_data_dir: &Option<String>, flavor: Flavor) -> any
 /// Configures the data source format for benchmark queries based on the specified format and engine.
 ///
 /// Parquet files are registered directly. Vortex files are created form Parquet files.
-fn init_data_source(
+async fn init_data_source(
     file_format: Format,
     base_url: &Url,
     single_file: bool,
     engine_ctx: &EngineCtx,
-    tokio_runtime: &Runtime,
 ) -> anyhow::Result<()> {
     let dataset = BenchmarkDataset::ClickBench { single_file };
 
@@ -370,15 +373,15 @@ fn init_data_source(
         let file_path = base_url
             .to_file_path()
             .map_err(|_| anyhow::anyhow!("invalid file URL: {}", base_url))?;
-        tokio_runtime.block_on(bench_vortex::file::convert_parquet_to_vortex(
-            &file_path, dataset,
-        ))?
+        bench_vortex::file::convert_parquet_to_vortex(&file_path, dataset).await?
     }
 
     match engine_ctx {
         EngineCtx::DataFusion(ctx) => match file_format {
             Format::Parquet | Format::OnDiskVortex => {
-                dataset.register_tables(&ctx.session, base_url, file_format)?
+                dataset
+                    .register_tables(&ctx.session, base_url, file_format)
+                    .await?
             }
             _ => {
                 vortex_panic!(

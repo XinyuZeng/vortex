@@ -10,9 +10,9 @@ use vortex_mask::{AllOr, Mask, MaskValues};
 use vortex_scalar::Scalar;
 
 use crate::arrays::{BoolArray, ConstantArray};
-use crate::compute::{fill_null, filter, scalar_at, slice, take};
+use crate::compute::{fill_null, filter, sum, take};
 use crate::patches::Patches;
-use crate::{Array, ArrayRef, ArrayVariants, IntoArray, ToCanonical};
+use crate::{Array, ArrayRef, IntoArray, ToCanonical};
 
 /// Validity information for an array
 #[derive(Clone, Debug)]
@@ -44,10 +44,10 @@ impl Validity {
                         length
                     )
                 }
-                let true_count = a
-                    .as_bool_typed()
-                    .vortex_expect("Validity array must be boolean")
-                    .true_count()?;
+                let true_count = sum(a)?
+                    .as_primitive()
+                    .as_::<usize>()?
+                    .ok_or_else(|| vortex_err!("Failed to compute true count"))?;
                 Ok(length - true_count)
             }
         }
@@ -113,7 +113,7 @@ impl Validity {
             Self::NonNullable | Self::AllValid => true,
             Self::AllInvalid => false,
             Self::Array(a) => {
-                let scalar = scalar_at(a, index)?;
+                let scalar = a.scalar_at(index)?;
                 scalar
                     .as_bool()
                     .value()
@@ -129,7 +129,7 @@ impl Validity {
 
     pub fn slice(&self, start: usize, stop: usize) -> VortexResult<Self> {
         match self {
-            Self::Array(a) => Ok(Self::Array(slice(a, start, stop)?)),
+            Self::Array(a) => Ok(Self::Array(a.slice(start, stop)?)),
             _ => Ok(self.clone()),
         }
     }
@@ -156,7 +156,7 @@ impl Validity {
             Self::Array(is_valid) => {
                 let maybe_is_valid = take(is_valid, indices)?;
                 // Null indices invalidate that position.
-                let is_valid = fill_null(&maybe_is_valid, Scalar::from(false))?;
+                let is_valid = fill_null(&maybe_is_valid, &Scalar::from(false))?;
                 Ok(Self::Array(is_valid))
             }
         }
@@ -477,7 +477,6 @@ mod tests {
     use vortex_dtype::Nullability;
     use vortex_mask::Mask;
 
-    use crate::array::Array;
     use crate::arrays::{BoolArray, PrimitiveArray};
     use crate::validity::Validity;
     use crate::{ArrayRef, IntoArray};

@@ -1,13 +1,15 @@
+use itertools::Itertools;
 use vortex_array::{Array, ArrayContext, ArrayRef};
 use vortex_dict::builders::DictEncoder;
 use vortex_dtype::DType;
-use vortex_error::{VortexResult, vortex_bail};
+use vortex_error::{VortexError, VortexResult, vortex_bail};
 
 use super::{DictStrategy, EncodingState, encode_chunk, start_encoding};
-use crate::layouts::chunked::writer::chunked_layout;
-use crate::layouts::dict::writer::dict_layout;
+use crate::children::OwnedLayoutChildren;
+use crate::layouts::chunked::ChunkedLayout;
+use crate::layouts::dict::DictLayout;
 use crate::segments::SegmentWriter;
-use crate::{Layout, LayoutWriter};
+use crate::{IntoLayout, LayoutRef, LayoutWriter};
 
 pub struct DictLayoutWriter {
     ctx: ArrayContext,
@@ -85,6 +87,13 @@ impl LayoutWriter for DictLayoutWriter {
         segment_writer: &mut dyn SegmentWriter,
         chunk: ArrayRef,
     ) -> VortexResult<()> {
+        assert_eq!(
+            chunk.dtype(),
+            &self.dtype,
+            "Can't push chunks of the wrong dtype into a LayoutWriter. Pushed {} but expected {}.",
+            chunk.dtype(),
+            self.dtype
+        );
         let mut to_be_encoded = Some(chunk);
         while let Some(remaining) = to_be_encoded.take() {
             match self.encoder.take() {
@@ -125,27 +134,35 @@ impl LayoutWriter for DictLayoutWriter {
         Ok(())
     }
 
-    fn finish(&mut self, segment_writer: &mut dyn SegmentWriter) -> VortexResult<Layout> {
+    fn finish(&mut self, segment_writer: &mut dyn SegmentWriter) -> VortexResult<LayoutRef> {
         if self.encoder.is_some() {
             vortex_bail!("flush not called before finish")
         }
 
-        let mut children = self
+        let mut children: Vec<LayoutRef> = self
             .writers
             .iter_mut()
             .map(|(values, codes)| {
-                dict_layout(
-                    values.finish(segment_writer)?,
-                    codes.finish(segment_writer)?,
+                Ok::<_, VortexError>(
+                    DictLayout::new(
+                        values.finish(segment_writer)?,
+                        codes.finish(segment_writer)?,
+                    )
+                    .into_layout(),
                 )
             })
-            .collect::<VortexResult<Vec<_>>>()?;
+            .try_collect()?;
 
         if children.len() == 1 {
             return Ok(children.remove(0));
         }
 
         let row_count = children.iter().map(|child| child.row_count()).sum();
-        Ok(chunked_layout(self.dtype.clone(), row_count, children))
+        Ok(ChunkedLayout::new(
+            row_count,
+            self.dtype.clone(),
+            OwnedLayoutChildren::layout_children(children),
+        )
+        .into_layout())
     }
 }

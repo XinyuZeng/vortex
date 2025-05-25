@@ -1,78 +1,32 @@
 use vortex_array::compute::{
-    FilterKernel, FilterKernelAdapter, ScalarAtFn, SliceFn, TakeFn, filter, scalar_at, slice, take,
+    FilterKernel, FilterKernelAdapter, TakeKernel, TakeKernelAdapter, filter, take,
 };
-use vortex_array::variants::PrimitiveArrayTrait;
-use vortex_array::vtable::ComputeVTable;
-use vortex_array::{Array, ArrayRef, register_kernel};
-use vortex_dtype::match_each_unsigned_integer_ptype;
-use vortex_error::{VortexResult, vortex_err};
+use vortex_array::{Array, ArrayRef, IntoArray, register_kernel};
+use vortex_error::VortexResult;
 use vortex_mask::Mask;
-use vortex_scalar::{PrimitiveScalar, Scalar};
-use zigzag::{ZigZag as ExternalZigZag, ZigZag};
 
-use crate::{ZigZagArray, ZigZagEncoding};
+use crate::{ZigZagArray, ZigZagVTable};
 
-impl ComputeVTable for ZigZagEncoding {
-    fn scalar_at_fn(&self) -> Option<&dyn ScalarAtFn<&dyn Array>> {
-        Some(self)
-    }
-
-    fn slice_fn(&self) -> Option<&dyn SliceFn<&dyn Array>> {
-        Some(self)
-    }
-
-    fn take_fn(&self) -> Option<&dyn TakeFn<&dyn Array>> {
-        Some(self)
-    }
-}
-
-impl FilterKernel for ZigZagEncoding {
+impl FilterKernel for ZigZagVTable {
     fn filter(&self, array: &ZigZagArray, mask: &Mask) -> VortexResult<ArrayRef> {
         let encoded = filter(array.encoded(), mask)?;
         Ok(ZigZagArray::try_new(encoded)?.into_array())
     }
 }
 
-register_kernel!(FilterKernelAdapter(ZigZagEncoding).lift());
+register_kernel!(FilterKernelAdapter(ZigZagVTable).lift());
 
-impl ScalarAtFn<&ZigZagArray> for ZigZagEncoding {
-    fn scalar_at(&self, array: &ZigZagArray, index: usize) -> VortexResult<Scalar> {
-        let scalar = scalar_at(array.encoded(), index)?;
-        if scalar.is_null() {
-            return Ok(scalar.reinterpret_cast(array.ptype()));
-        }
-
-        let pscalar = PrimitiveScalar::try_from(&scalar)?;
-        match_each_unsigned_integer_ptype!(pscalar.ptype(), |$P| {
-            Ok(Scalar::primitive(
-                <<$P as ZigZagEncoded>::Int>::decode(pscalar.typed_value::<$P>().ok_or_else(|| {
-                    vortex_err!(
-                        "Cannot decode provided scalar: expected {}, got ptype {}",
-                        std::any::type_name::<$P>(),
-                        pscalar.ptype()
-                    )
-                })?),
-                array.dtype().nullability(),
-            ))
-        })
-    }
-}
-
-impl SliceFn<&ZigZagArray> for ZigZagEncoding {
-    fn slice(&self, array: &ZigZagArray, start: usize, stop: usize) -> VortexResult<ArrayRef> {
-        Ok(ZigZagArray::try_new(slice(array.encoded(), start, stop)?)?.into_array())
-    }
-}
-
-impl TakeFn<&ZigZagArray> for ZigZagEncoding {
+impl TakeKernel for ZigZagVTable {
     fn take(&self, array: &ZigZagArray, indices: &dyn Array) -> VortexResult<ArrayRef> {
         let encoded = take(array.encoded(), indices)?;
         Ok(ZigZagArray::try_new(encoded)?.into_array())
     }
 }
 
-trait ZigZagEncoded {
-    type Int: ZigZag;
+register_kernel!(TakeKernelAdapter(ZigZagVTable).lift());
+
+pub(crate) trait ZigZagEncoded {
+    type Int: zigzag::ZigZag;
 }
 
 impl ZigZagEncoded for u8 {
@@ -94,32 +48,14 @@ impl ZigZagEncoded for u64 {
 #[cfg(test)]
 mod tests {
     use vortex_array::arrays::{BooleanBuffer, PrimitiveArray};
-    use vortex_array::compute::{
-        SearchResult, SearchSortedSide, filter, scalar_at, search_sorted, take,
-    };
+    use vortex_array::compute::{filter, take};
     use vortex_array::validity::Validity;
-    use vortex_array::vtable::EncodingVTable;
     use vortex_array::{Array, IntoArray, ToCanonical};
     use vortex_buffer::buffer;
     use vortex_dtype::Nullability;
     use vortex_scalar::Scalar;
 
     use crate::ZigZagEncoding;
-
-    #[test]
-    pub fn search_sorted_uncompressed() {
-        let zigzag = ZigZagEncoding
-            .encode(
-                &buffer![-189, -160, 1].into_array().to_canonical().unwrap(),
-                None,
-            )
-            .unwrap()
-            .unwrap();
-        assert_eq!(
-            search_sorted(&zigzag, -169, SearchSortedSide::Right).unwrap(),
-            SearchResult::NotFound(1)
-        );
-    }
 
     #[test]
     pub fn nullable_scalar_at() {
@@ -133,7 +69,7 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(
-            scalar_at(&zigzag, 1).unwrap(),
+            zigzag.scalar_at(1).unwrap(),
             Scalar::primitive(-160, Nullability::Nullable)
         );
     }

@@ -6,10 +6,10 @@ use bytes::Bytes;
 use indicatif::ProgressBar;
 use parquet::basic::{Compression, ZstdLevel};
 use tokio::runtime::Runtime;
-use vortex::arrays::ChunkedArray;
+use vortex::arrays::{ChunkedArray, ChunkedVTable};
 use vortex::builders::builder_with_capacity;
 use vortex::error::VortexUnwrap;
-use vortex::{Array, ArrayExt};
+use vortex::{Array, IntoArray};
 
 use crate::Format;
 use crate::bench_run::run;
@@ -58,13 +58,18 @@ pub fn benchmark_compress(
     tracing::info!("Running {bench_name} benchmark");
 
     let vx_array = runtime.block_on(async { dataset_handle.to_vortex_array().await });
-    let uncompressed =
-        ChunkedArray::from_iter(vx_array.as_::<ChunkedArray>().chunks().iter().map(|chunk| {
-            let mut builder = builder_with_capacity(chunk.dtype(), chunk.len());
-            chunk.append_to_builder(builder.as_mut()).vortex_unwrap();
-            builder.finish()
-        }))
-        .into_array();
+    let uncompressed = ChunkedArray::from_iter(
+        vx_array
+            .as_::<ChunkedVTable>()
+            .chunks()
+            .iter()
+            .map(|chunk| {
+                let mut builder = builder_with_capacity(chunk.dtype(), chunk.len());
+                chunk.append_to_builder(builder.as_mut()).vortex_unwrap();
+                builder.finish()
+            }),
+    )
+    .into_array();
 
     let compressed_size = AtomicU64::default();
 
@@ -86,7 +91,7 @@ pub fn benchmark_compress(
         });
         vortex_compress_time = Some(time);
         timings.push(CompressionTimingMeasurement {
-            name: format!("compress time/{}", bench_name),
+            name: format!("compress time/{bench_name}"),
             time,
             format: Format::OnDiskVortex,
         });
@@ -94,7 +99,7 @@ pub fn benchmark_compress(
 
         let compressed_size_f64 = compressed_size.load(Ordering::SeqCst) as f64;
         ratios.push(CustomUnitMeasurement {
-            name: format!("vortex size/{}", bench_name),
+            name: format!("vortex size/{bench_name}"),
             format: Format::OnDiskVortex,
             unit: Cow::from("bytes"),
             value: compressed_size_f64,
@@ -103,7 +108,7 @@ pub fn benchmark_compress(
 
     if formats.contains(&Format::Parquet) {
         let parquet_compressed_size = AtomicU64::default();
-        let chunked = uncompressed.as_::<ChunkedArray>().clone();
+        let chunked = uncompressed.as_::<ChunkedVTable>().clone();
         let (batches, schema) = chunked_to_vec_record_batch(chunked);
         let time = run(runtime, iterations, || async {
             parquet_compressed_size.store(
@@ -118,7 +123,7 @@ pub fn benchmark_compress(
         });
         parquet_compress_time = Some(time);
         timings.push(CompressionTimingMeasurement {
-            name: format!("compress time/{}", bench_name),
+            name: format!("compress time/{bench_name}"),
             time,
             format: Format::Parquet,
         });
@@ -126,14 +131,14 @@ pub fn benchmark_compress(
         progress.inc(1);
         let parquet_compressed_size = parquet_compressed_size.into_inner();
         ratios.push(CustomUnitMeasurement {
-            name: format!("parquet-zstd size/{}", bench_name),
+            name: format!("parquet-zstd size/{bench_name}"),
             // unlike timings, ratios have a single column vortex
             format: Format::OnDiskVortex,
             unit: Cow::from("bytes"),
             value: parquet_compressed_size as f64,
         });
         ratios.push(CustomUnitMeasurement {
-            name: format!("vortex:parquet-zstd size/{}", bench_name),
+            name: format!("vortex:parquet-zstd size/{bench_name}"),
             format: Format::OnDiskVortex,
             unit: Cow::from("ratio"),
             value: compressed_size.load(Ordering::SeqCst) as f64 / parquet_compressed_size as f64,
@@ -156,7 +161,7 @@ pub fn benchmark_compress(
         });
         vortex_decompress_time = Some(time);
         timings.push(CompressionTimingMeasurement {
-            name: format!("decompress time/{}", bench_name),
+            name: format!("decompress time/{bench_name}"),
             time,
             format: Format::OnDiskVortex,
         });
@@ -165,7 +170,7 @@ pub fn benchmark_compress(
 
     if formats.contains(&Format::Parquet) {
         let buffer = LazyCell::new(|| {
-            let chunked = uncompressed.as_::<ChunkedArray>().clone();
+            let chunked = uncompressed.as_::<ChunkedVTable>().clone();
             let (batches, schema) = chunked_to_vec_record_batch(chunked);
             let mut buf = Vec::new();
             parquet_compress_write(
@@ -183,7 +188,7 @@ pub fn benchmark_compress(
         });
         parquet_decompress_time = Some(time);
         timings.push(CompressionTimingMeasurement {
-            name: format!("decompress time/{}", bench_name),
+            name: format!("decompress time/{bench_name}"),
             time,
             format: Format::Parquet,
         });
@@ -192,7 +197,7 @@ pub fn benchmark_compress(
 
     if let Some((vortex, parquet)) = vortex_compress_time.zip(parquet_compress_time) {
         ratios.push(CustomUnitMeasurement {
-            name: format!("vortex:parquet-zstd ratio compress time/{}", bench_name),
+            name: format!("vortex:parquet-zstd ratio compress time/{bench_name}"),
             format: Format::OnDiskVortex,
             unit: Cow::from("ratio"),
             value: vortex.as_nanos() as f64 / parquet.as_nanos() as f64,
@@ -201,7 +206,7 @@ pub fn benchmark_compress(
 
     if let Some((vortex, parquet)) = vortex_decompress_time.zip(parquet_decompress_time) {
         ratios.push(CustomUnitMeasurement {
-            name: format!("vortex:parquet-zstd ratio decompress time/{}", bench_name),
+            name: format!("vortex:parquet-zstd ratio decompress time/{bench_name}"),
             format: Format::OnDiskVortex,
             unit: Cow::from("ratio"),
             value: vortex.as_nanos() as f64 / parquet.as_nanos() as f64,

@@ -3,11 +3,10 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
 
+use arcref::ArcRef;
 use itertools::Itertools;
-use vortex_array::arcref::ArcRef;
 use vortex_array::arrays::ConstantArray;
-use vortex_array::nbytes::NBytes;
-use vortex_array::stats::{PRUNING_STATS, STATS_TO_WRITE};
+use vortex_array::stats::{PRUNING_STATS, Stat};
 use vortex_array::{Array, ArrayContext, ArrayRef, IntoArray};
 use vortex_btrblocks::BtrBlocksCompressor;
 use vortex_dtype::DType;
@@ -18,10 +17,10 @@ use vortex_layout::layouts::flat::writer::FlatLayoutStrategy;
 use vortex_layout::layouts::repartition::{
     RepartitionStrategy, RepartitionWriter, RepartitionWriterOptions,
 };
-use vortex_layout::layouts::stats::writer::{StatsLayoutOptions, StatsLayoutWriter};
 use vortex_layout::layouts::struct_::writer::StructLayoutWriter;
+use vortex_layout::layouts::zoned::writer::{ZonedLayoutOptions, ZonedLayoutWriter};
 use vortex_layout::segments::SegmentWriter;
-use vortex_layout::{Layout, LayoutStrategy, LayoutWriter, LayoutWriterExt};
+use vortex_layout::{LayoutRef, LayoutStrategy, LayoutWriter, LayoutWriterExt};
 
 const ROW_BLOCK_SIZE: usize = 8192;
 
@@ -33,9 +32,7 @@ impl LayoutStrategy for VortexLayoutStrategy {
     fn new_writer(&self, ctx: &ArrayContext, dtype: &DType) -> VortexResult<Box<dyn LayoutWriter>> {
         // First, we unwrap struct arrays into their components.
         if dtype.is_struct() {
-            return Ok(
-                StructLayoutWriter::try_new_with_strategy(ctx, dtype, self.clone())?.boxed(),
-            );
+            return Ok(StructLayoutWriter::try_new_with_strategy(ctx, dtype, self)?.boxed());
         }
 
         // We buffer arrays per column, before flushing them into a chunked layout.
@@ -70,24 +67,25 @@ impl LayoutStrategy for VortexLayoutStrategy {
 
         let writer = dict_strategy.new_writer(ctx, dtype)?;
 
-        // Prior to repartitioning, we record statistics
-        let stats_writer = StatsLayoutWriter::new(
+        // Prior to repartitioning, we create a zone map
+        let zoned_writer = ZonedLayoutWriter::new(
             ctx.clone(),
             dtype,
             writer,
             ArcRef::new_arc(Arc::new(BtrBlocksCompressedStrategy {
                 child: ArcRef::new_arc(Arc::new(FlatLayoutStrategy::default())),
             })),
-            StatsLayoutOptions {
+            ZonedLayoutOptions {
                 block_size: ROW_BLOCK_SIZE,
                 stats: PRUNING_STATS.into(),
+                max_variable_length_statistics_size: 64,
             },
         )
         .boxed();
 
         let writer = RepartitionWriter::new(
             dtype.clone(),
-            stats_writer,
+            zoned_writer,
             RepartitionWriterOptions {
                 // No minimum block size in bytes
                 block_size_minimum: 0,
@@ -136,22 +134,22 @@ impl LayoutWriter for BtrBlocksCompressedWriter {
         segment_writer: &mut dyn SegmentWriter,
         chunk: ArrayRef,
     ) -> VortexResult<()> {
-        // Compute the stats for the chunk prior to compression
-        chunk.statistics().compute_all(STATS_TO_WRITE)?;
+        let chunk = chunk.to_canonical()?.into_array();
 
-        // Short circuit the decision if the chunk is constant
+        // Compute the stats for the chunk prior to compression
+        chunk
+            .statistics()
+            .compute_all(&Stat::all().collect::<Vec<_>>())?;
+
+        // If we have information about the data from the previous chunk
         let compressed_chunk = if let Some(constant) = chunk.as_constant() {
             Some(ConstantArray::new(constant, chunk.len()).into_array())
-        }
-        // If we have information about the data from the previous chunk
-        else if let Some(prev_compression) = self.previous_chunk.as_ref() {
+        } else if let Some(prev_compression) = self.previous_chunk.as_ref() {
             let prev_chunk = prev_compression.chunk.clone();
-            let canonical_chunk = chunk.to_canonical()?;
-            let canonical_nbytes = canonical_chunk.as_ref().nbytes();
 
-            if let Some(encoded_chunk) =
-                encode_children_like(canonical_chunk.into_array(), prev_chunk)?
-            {
+            let canonical_nbytes = chunk.as_ref().nbytes();
+
+            if let Some(encoded_chunk) = encode_children_like(chunk.clone(), prev_chunk)? {
                 let ratio = canonical_nbytes as f64 / encoded_chunk.nbytes() as f64;
 
                 // Make sure the ratio is within the expected drift, if it isn't we  fall back to the compressor.
@@ -176,9 +174,8 @@ impl LayoutWriter for BtrBlocksCompressedWriter {
         let compressed_chunk = match compressed_chunk {
             Some(array) => array,
             None => {
-                let canonical_chunk = chunk.to_canonical()?;
-                let canonical_size = canonical_chunk.as_ref().nbytes() as f64;
-                let compressed = BtrBlocksCompressor.compress_canonical(canonical_chunk)?;
+                let canonical_size = chunk.nbytes() as f64;
+                let compressed = BtrBlocksCompressor.compress(&chunk)?;
 
                 if compressed.is_canonical()
                     || ((canonical_size / compressed.nbytes() as f64) < COMPRESSION_DRIFT_THRESHOLD)
@@ -204,7 +201,7 @@ impl LayoutWriter for BtrBlocksCompressedWriter {
         self.child.flush(segment_writer)
     }
 
-    fn finish(&mut self, segment_writer: &mut dyn SegmentWriter) -> VortexResult<Layout> {
+    fn finish(&mut self, segment_writer: &mut dyn SegmentWriter) -> VortexResult<LayoutRef> {
         self.child.finish(segment_writer)
     }
 }
@@ -264,7 +261,7 @@ impl LayoutWriter for BufferedWriter {
         self.child.flush(segment_writer)
     }
 
-    fn finish(&mut self, segment_writer: &mut dyn SegmentWriter) -> VortexResult<Layout> {
+    fn finish(&mut self, segment_writer: &mut dyn SegmentWriter) -> VortexResult<LayoutRef> {
         self.child.finish(segment_writer)
     }
 }
@@ -275,7 +272,7 @@ fn encode_children_like(current: ArrayRef, previous: ArrayRef) -> VortexResult<O
             ConstantArray::new(constant, current.len()).into_array(),
         ))
     } else if let Some(encoded) = previous
-        .vtable()
+        .encoding()
         .encode(&current.to_canonical()?, Some(&previous))?
     {
         let previous_children = previous.children();

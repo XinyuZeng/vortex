@@ -1,12 +1,12 @@
 use std::sync::LazyLock;
 
+use arcref::ArcRef;
 use vortex_dtype::DType;
 use vortex_error::{VortexError, VortexResult, vortex_bail, vortex_err, vortex_panic};
 
-use crate::arcref::ArcRef;
-use crate::compute::{ComputeFn, ComputeFnVTable, InvocationArgs, Kernel, Output};
-use crate::encoding::Encoding;
-use crate::{Array, ArrayRef, ToCanonical};
+use crate::compute::{ComputeFn, ComputeFnVTable, InvocationArgs, Kernel, Output, UnaryArgs};
+use crate::vtable::VTable;
+use crate::{Array, ArrayRef, IntoArray, ToCanonical};
 
 /// Logically invert a boolean array, preserving its validity.
 pub fn invert(array: &dyn Array) -> VortexResult<ArrayRef> {
@@ -26,7 +26,7 @@ impl ComputeFnVTable for Invert {
         args: &InvocationArgs,
         kernels: &[ArcRef<dyn Kernel>],
     ) -> VortexResult<Output> {
-        let InvertArgs { array } = InvertArgs::try_from(args)?;
+        let UnaryArgs { array, .. } = UnaryArgs::<()>::try_from(args)?;
 
         for kernel in kernels {
             if let Some(output) = kernel.invoke(args)? {
@@ -40,7 +40,7 @@ impl ComputeFnVTable for Invert {
         // Otherwise, we canonicalize into a boolean array and invert.
         log::debug!(
             "No invert implementation found for encoding {}",
-            array.encoding(),
+            array.encoding_id(),
         );
         if array.is_canonical() {
             vortex_panic!("Canonical bool array does not implement invert");
@@ -49,7 +49,8 @@ impl ComputeFnVTable for Invert {
     }
 
     fn return_dtype(&self, args: &InvocationArgs) -> VortexResult<DType> {
-        let InvertArgs { array } = InvertArgs::try_from(args)?;
+        let UnaryArgs { array, .. } = UnaryArgs::<()>::try_from(args)?;
+
         if !matches!(array.dtype(), DType::Bool(..)) {
             vortex_bail!("Expected boolean array, got {}", array.dtype());
         }
@@ -57,7 +58,7 @@ impl ComputeFnVTable for Invert {
     }
 
     fn return_len(&self, args: &InvocationArgs) -> VortexResult<usize> {
-        let InvertArgs { array } = InvertArgs::try_from(args)?;
+        let UnaryArgs { array, .. } = UnaryArgs::<()>::try_from(args)?;
         Ok(array.len())
     }
 
@@ -87,27 +88,27 @@ impl<'a> TryFrom<&InvocationArgs<'a>> for InvertArgs<'a> {
 pub struct InvertKernelRef(ArcRef<dyn Kernel>);
 inventory::collect!(InvertKernelRef);
 
-pub trait InvertKernel: Encoding {
+pub trait InvertKernel: VTable {
     /// Logically invert a boolean array. Converts true -> false, false -> true, null -> null.
     fn invert(&self, array: &Self::Array) -> VortexResult<ArrayRef>;
 }
 
 #[derive(Debug)]
-pub struct InvertKernelAdapter<E: Encoding>(pub E);
+pub struct InvertKernelAdapter<V: VTable>(pub V);
 
-impl<E: Encoding + InvertKernel> InvertKernelAdapter<E> {
+impl<V: VTable + InvertKernel> InvertKernelAdapter<V> {
     pub const fn lift(&'static self) -> InvertKernelRef {
         InvertKernelRef(ArcRef::new_ref(self))
     }
 }
 
-impl<E: Encoding + InvertKernel> Kernel for InvertKernelAdapter<E> {
+impl<V: VTable + InvertKernel> Kernel for InvertKernelAdapter<V> {
     fn invoke(&self, args: &InvocationArgs) -> VortexResult<Option<Output>> {
         let args = InvertArgs::try_from(args)?;
-        let Some(array) = args.array.as_any().downcast_ref::<E::Array>() else {
+        let Some(array) = args.array.as_opt::<V>() else {
             return Ok(None);
         };
-        Ok(Some(E::invert(&self.0, array)?.into()))
+        Ok(Some(V::invert(&self.0, array)?.into()))
     }
 }
 

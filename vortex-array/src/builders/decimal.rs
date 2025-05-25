@@ -4,12 +4,13 @@ use vortex_buffer::BufferMut;
 use vortex_dtype::{DType, DecimalDType, Nullability};
 use vortex_error::{VortexResult, vortex_bail, vortex_panic};
 use vortex_mask::Mask;
+use vortex_scalar::NativeDecimalType;
 
-use crate::arrays::{BoolArray, DecimalArray, NativeDecimalType};
+use crate::arrays::{BoolArray, DecimalArray};
 use crate::builders::ArrayBuilder;
 use crate::builders::lazy_validity_builder::LazyNullBufferBuilder;
 use crate::validity::Validity;
-use crate::{Array, ArrayRef, ToCanonical};
+use crate::{Array, ArrayRef, IntoArray, ToCanonical};
 
 pub struct DecimalBuilder<T> {
     values: BufferMut<T>,
@@ -106,7 +107,7 @@ impl<T: NativeDecimalType> DecimalBuilder<T> {
     }
 }
 
-impl<T: NativeDecimalType + Default + Send + 'static> ArrayBuilder for DecimalBuilder<T> {
+impl<T: NativeDecimalType> ArrayBuilder for DecimalBuilder<T> {
     fn as_any(&self) -> &dyn Any {
         self
     }

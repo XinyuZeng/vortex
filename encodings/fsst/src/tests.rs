@@ -1,6 +1,5 @@
 use vortex_array::arrays::builder::VarBinBuilder;
-use vortex_array::compute::{filter, scalar_at, slice, take};
-use vortex_array::vtable::EncodingVTable;
+use vortex_array::compute::{filter, take};
 use vortex_array::{Array, ArrayRef, IntoArray, ToCanonical};
 use vortex_buffer::buffer;
 use vortex_dtype::{DType, Nullability};
@@ -10,7 +9,7 @@ use crate::{FSSTEncoding, fsst_compress, fsst_train_compressor};
 
 macro_rules! assert_nth_scalar {
     ($arr:expr, $n:expr, $expected:expr) => {
-        assert_eq!(scalar_at(&$arr, $n).unwrap(), $expected.try_into().unwrap());
+        assert_eq!($arr.scalar_at($n).unwrap(), $expected.try_into().unwrap());
     };
 }
 
@@ -24,8 +23,8 @@ fn build_fsst_array() -> ArrayRef {
     input_array.append_value(b"Nothing in present history can contradict them");
     let input_array = input_array.finish(DType::Utf8(Nullability::NonNullable));
 
-    let compressor = fsst_train_compressor(&input_array).unwrap();
-    fsst_compress(&input_array, &compressor)
+    let compressor = fsst_train_compressor(input_array.as_ref()).unwrap();
+    fsst_compress(input_array.as_ref(), &compressor)
         .unwrap()
         .into_array()
 }
@@ -51,8 +50,8 @@ fn test_fsst_array_ops() {
     );
 
     // test slice
-    let fsst_sliced = slice(&fsst_array, 1, 3).unwrap();
-    assert_eq!(fsst_sliced.encoding(), FSSTEncoding.id());
+    let fsst_sliced = fsst_array.slice(1, 3).unwrap();
+    assert_eq!(fsst_sliced.encoding_id(), FSSTEncoding.id());
     assert_eq!(fsst_sliced.len(), 2);
     assert_nth_scalar!(
         fsst_sliced,
@@ -68,7 +67,7 @@ fn test_fsst_array_ops() {
     // test take
     let indices = buffer![0, 2].into_array();
     let fsst_taken = take(&fsst_array, &indices).unwrap();
-    assert_eq!(fsst_taken.encoding(), FSSTEncoding.id());
+    assert_eq!(fsst_taken.encoding_id(), FSSTEncoding.id());
     assert_eq!(fsst_taken.len(), 2);
     assert_nth_scalar!(
         fsst_taken,
@@ -85,7 +84,7 @@ fn test_fsst_array_ops() {
     let mask = Mask::from_iter([false, true, true]);
 
     let fsst_filtered = filter(&fsst_array, &mask).unwrap();
-    assert_eq!(fsst_filtered.encoding(), FSSTEncoding.id());
+    assert_eq!(fsst_filtered.encoding_id(), FSSTEncoding.id());
     assert_eq!(fsst_filtered.len(), 2);
     assert_nth_scalar!(
         fsst_filtered,
@@ -100,8 +99,8 @@ fn test_fsst_array_ops() {
 
     for i in 0..fsst_array.len() {
         assert_eq!(
-            scalar_at(&fsst_array, i).unwrap(),
-            scalar_at(&canonical_array, i).unwrap(),
+            fsst_array.scalar_at(i).unwrap(),
+            canonical_array.scalar_at(i).unwrap(),
         );
     }
 }

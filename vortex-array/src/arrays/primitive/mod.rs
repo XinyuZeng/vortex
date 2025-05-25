@@ -7,27 +7,50 @@ use arrow_buffer::BooleanBufferBuilder;
 use vortex_buffer::{Buffer, BufferMut, ByteBuffer};
 use vortex_dtype::{DType, NativePType, Nullability, PType, match_each_native_ptype};
 use vortex_error::{VortexResult, vortex_panic};
-use vortex_mask::Mask;
 
-use crate::array::{ArrayCanonicalImpl, ArrayValidityImpl};
 use crate::builders::ArrayBuilder;
 use crate::stats::{ArrayStats, StatsSetRef};
 use crate::validity::Validity;
-use crate::variants::PrimitiveArrayTrait;
-use crate::vtable::VTableRef;
-use crate::{
-    Array, ArrayImpl, ArrayRef, ArrayStatisticsImpl, ArrayVariantsImpl, Canonical, EmptyMetadata,
-    Encoding, IntoArray, try_from_array_ref,
-};
+use crate::{Array, ArrayRef, Canonical, EncodingId, EncodingRef, IntoArray, vtable};
 
 mod compute;
 mod native_value;
+mod ops;
 mod patch;
 mod serde;
 mod top_value;
 
 pub use compute::{IS_CONST_LANE_WIDTH, compute_is_constant};
 pub use native_value::NativeValue;
+
+use crate::vtable::{
+    ArrayVTable, CanonicalVTable, NotSupported, VTable, ValidityHelper,
+    ValidityVTableFromValidityHelper,
+};
+
+vtable!(Primitive);
+
+impl VTable for PrimitiveVTable {
+    type Array = PrimitiveArray;
+    type Encoding = PrimitiveEncoding;
+
+    type ArrayVTable = Self;
+    type CanonicalVTable = Self;
+    type OperationsVTable = Self;
+    type ValidityVTable = ValidityVTableFromValidityHelper;
+    type VisitorVTable = Self;
+    type ComputeVTable = NotSupported;
+    type EncodeVTable = NotSupported;
+    type SerdeVTable = Self;
+
+    fn id(_encoding: &Self::Encoding) -> EncodingId {
+        EncodingId::new_ref("vortex.primitive")
+    }
+
+    fn encoding(_array: &Self::Array) -> EncodingRef {
+        EncodingRef::new_ref(PrimitiveEncoding.as_ref())
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct PrimitiveArray {
@@ -37,14 +60,8 @@ pub struct PrimitiveArray {
     stats_set: ArrayStats,
 }
 
-try_from_array_ref!(PrimitiveArray);
-
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct PrimitiveEncoding;
-impl Encoding for PrimitiveEncoding {
-    type Array = PrimitiveArray;
-    type Metadata = EmptyMetadata;
-}
 
 impl PrimitiveArray {
     pub fn new<T: NativePType>(buffer: impl Into<Buffer<T>>, validity: Validity) -> Self {
@@ -98,8 +115,8 @@ impl PrimitiveArray {
         Self::new(values.freeze(), Validity::from(validity.finish()))
     }
 
-    pub fn validity(&self) -> &Validity {
-        &self.validity
+    pub fn ptype(&self) -> PType {
+        self.dtype().to_ptype()
     }
 
     pub fn byte_buffer(&self) -> &ByteBuffer {
@@ -223,11 +240,11 @@ impl PrimitiveArray {
                 self.ptype()
             )
         }
-        let length = self.len();
-        let raw_slice = self.byte_buffer().as_slice();
-        debug_assert_eq!(raw_slice.len() / size_of::<T>(), length);
+        let raw_slice = self.byte_buffer().as_ptr();
         // SAFETY: alignment of Buffer is checked on construction
-        unsafe { std::slice::from_raw_parts(raw_slice.as_ptr().cast(), length) }
+        unsafe {
+            std::slice::from_raw_parts(raw_slice.cast(), self.byte_buffer().len() / size_of::<T>())
+        }
     }
 
     pub fn reinterpret_cast(&self, ptype: PType) -> Self {
@@ -245,48 +262,25 @@ impl PrimitiveArray {
     }
 }
 
-impl ArrayImpl for PrimitiveArray {
-    type Encoding = PrimitiveEncoding;
-
-    fn _len(&self) -> usize {
-        self.byte_buffer().len() / self.ptype().byte_width()
+impl ArrayVTable<PrimitiveVTable> for PrimitiveVTable {
+    fn len(array: &PrimitiveArray) -> usize {
+        array.byte_buffer().len() / array.ptype().byte_width()
     }
 
-    fn _dtype(&self) -> &DType {
-        &self.dtype
-    }
-    fn _vtable(&self) -> VTableRef {
-        VTableRef::new_ref(&PrimitiveEncoding)
+    fn dtype(array: &PrimitiveArray) -> &DType {
+        &array.dtype
     }
 
-    fn _with_children(&self, children: &[ArrayRef]) -> VortexResult<Self> {
-        let validity = if self.validity().is_array() {
-            Validity::Array(children[0].clone())
-        } else {
-            self.validity().clone()
-        };
-
-        Ok(Self::from_byte_buffer(
-            self.byte_buffer().clone(),
-            self.ptype(),
-            validity,
-        ))
+    fn stats(array: &PrimitiveArray) -> StatsSetRef<'_> {
+        array.stats_set.to_ref(array.as_ref())
     }
 }
 
-impl ArrayStatisticsImpl for PrimitiveArray {
-    fn _stats_ref(&self) -> StatsSetRef<'_> {
-        self.stats_set.to_ref(self)
+impl ValidityHelper for PrimitiveArray {
+    fn validity(&self) -> &Validity {
+        &self.validity
     }
 }
-
-impl ArrayVariantsImpl for PrimitiveArray {
-    fn _as_primitive_typed(&self) -> Option<&dyn PrimitiveArrayTrait> {
-        Some(self)
-    }
-}
-
-impl PrimitiveArrayTrait for PrimitiveArray {}
 
 impl<T: NativePType> FromIterator<T> for PrimitiveArray {
     fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
@@ -307,60 +301,58 @@ impl<T: NativePType> IntoArray for BufferMut<T> {
     }
 }
 
-impl ArrayCanonicalImpl for PrimitiveArray {
-    fn _to_canonical(&self) -> VortexResult<Canonical> {
-        Ok(Canonical::Primitive(self.clone()))
+impl CanonicalVTable<PrimitiveVTable> for PrimitiveVTable {
+    fn canonicalize(array: &PrimitiveArray) -> VortexResult<Canonical> {
+        Ok(Canonical::Primitive(array.clone()))
     }
 
-    fn _append_to_builder(&self, builder: &mut dyn ArrayBuilder) -> VortexResult<()> {
-        builder.extend_from_array(self)
-    }
-}
-
-impl ArrayValidityImpl for PrimitiveArray {
-    fn _is_valid(&self, index: usize) -> VortexResult<bool> {
-        self.validity.is_valid(index)
-    }
-
-    fn _all_valid(&self) -> VortexResult<bool> {
-        self.validity.all_valid()
-    }
-
-    fn _all_invalid(&self) -> VortexResult<bool> {
-        self.validity.all_invalid()
-    }
-
-    fn _validity_mask(&self) -> VortexResult<Mask> {
-        self.validity.to_mask(self.len())
+    fn append_to_builder(
+        array: &PrimitiveArray,
+        builder: &mut dyn ArrayBuilder,
+    ) -> VortexResult<()> {
+        builder.extend_from_array(array.as_ref())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use vortex_buffer::buffer;
+    use vortex_scalar::PValue;
 
-    use crate::array::Array;
     use crate::arrays::{BoolArray, PrimitiveArray};
     use crate::compute::conformance::mask::test_mask;
+    use crate::compute::conformance::search_sorted::rstest_reuse::apply;
+    use crate::compute::conformance::search_sorted::{search_sorted_conformance, *};
+    use crate::search_sorted::{SearchResult, SearchSorted, SearchSortedSide};
     use crate::validity::Validity;
+    use crate::{ArrayRef, IntoArray};
+
+    #[apply(search_sorted_conformance)]
+    fn search_sorted_primitive(
+        #[case] array: ArrayRef,
+        #[case] value: i32,
+        #[case] side: SearchSortedSide,
+        #[case] expected: SearchResult,
+    ) {
+        let res = array
+            .as_primitive_typed()
+            .search_sorted(&Some(PValue::from(value)), side);
+        assert_eq!(res, expected);
+    }
 
     #[test]
     fn test_mask_primitive_array() {
-        test_mask(&PrimitiveArray::new(
-            buffer![0, 1, 2, 3, 4],
-            Validity::NonNullable,
-        ));
-        test_mask(&PrimitiveArray::new(
-            buffer![0, 1, 2, 3, 4],
-            Validity::AllValid,
-        ));
-        test_mask(&PrimitiveArray::new(
-            buffer![0, 1, 2, 3, 4],
-            Validity::AllInvalid,
-        ));
-        test_mask(&PrimitiveArray::new(
-            buffer![0, 1, 2, 3, 4],
-            Validity::Array(BoolArray::from_iter([true, false, true, false, true]).into_array()),
-        ));
+        test_mask(PrimitiveArray::new(buffer![0, 1, 2, 3, 4], Validity::NonNullable).as_ref());
+        test_mask(PrimitiveArray::new(buffer![0, 1, 2, 3, 4], Validity::AllValid).as_ref());
+        test_mask(PrimitiveArray::new(buffer![0, 1, 2, 3, 4], Validity::AllInvalid).as_ref());
+        test_mask(
+            PrimitiveArray::new(
+                buffer![0, 1, 2, 3, 4],
+                Validity::Array(
+                    BoolArray::from_iter([true, false, true, false, true]).into_array(),
+                ),
+            )
+            .as_ref(),
+        );
     }
 }

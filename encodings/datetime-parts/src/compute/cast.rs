@@ -1,11 +1,11 @@
 use vortex_array::compute::{CastKernel, CastKernelAdapter, cast};
-use vortex_array::{Array, ArrayRef, register_kernel};
+use vortex_array::{Array, ArrayRef, IntoArray, register_kernel};
 use vortex_dtype::DType;
 use vortex_error::{VortexResult, vortex_bail};
 
-use crate::{DateTimePartsArray, DateTimePartsEncoding};
+use crate::{DateTimePartsArray, DateTimePartsVTable};
 
-impl CastKernel for DateTimePartsEncoding {
+impl CastKernel for DateTimePartsVTable {
     fn cast(&self, array: &DateTimePartsArray, dtype: &DType) -> VortexResult<ArrayRef> {
         if !array.dtype().eq_ignore_nullability(dtype) {
             vortex_bail!("cannot cast from {} to {}", array.dtype(), dtype);
@@ -24,7 +24,7 @@ impl CastKernel for DateTimePartsEncoding {
     }
 }
 
-register_kernel!(CastKernelAdapter(DateTimePartsEncoding).lift());
+register_kernel!(CastKernelAdapter(DateTimePartsVTable).lift());
 
 #[cfg(test)]
 mod tests {
@@ -32,7 +32,7 @@ mod tests {
     use vortex_array::arrays::{PrimitiveArray, TemporalArray};
     use vortex_array::compute::cast;
     use vortex_array::validity::Validity;
-    use vortex_array::{Array, ArrayRef};
+    use vortex_array::{Array, ArrayRef, IntoArray};
     use vortex_buffer::buffer;
     use vortex_dtype::datetime::TimeUnit;
     use vortex_dtype::{DType, Nullability};
@@ -72,7 +72,7 @@ mod tests {
         let array = date_time_array(validity);
         let new_dtype = array.dtype().with_nullability(cast_to_nullability);
         let result = cast(&array, &new_dtype);
-        assert!(result.is_ok(), "{:?}", result);
+        assert!(result.is_ok(), "{result:?}");
         assert_eq!(result.unwrap().dtype(), &new_dtype);
     }
 
@@ -86,8 +86,7 @@ mod tests {
             result
                 .as_ref()
                 .is_err_and(|err| err.to_string().contains("cannot cast from")),
-            "{:?}",
-            result
+            "{result:?}"
         );
 
         let result = cast(
@@ -98,8 +97,7 @@ mod tests {
             result.as_ref().is_err_and(|err| err
                 .to_string()
                 .contains("invalid cast from nullable to non-nullable")),
-            "{:?}",
-            result
+            "{result:?}"
         );
     }
 }

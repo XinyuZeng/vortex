@@ -5,52 +5,12 @@ pub(crate) mod filter;
 mod invert;
 mod is_sorted;
 mod min_max;
-mod scalar_at;
-mod slice;
 pub(crate) mod take;
 mod take_from;
 
-use vortex_array::Array;
-use vortex_array::compute::{
-    FillNullFn, IsSortedFn, MinMaxFn, ScalarAtFn, SliceFn, TakeFn, TakeFromFn,
-};
-use vortex_array::vtable::ComputeVTable;
-
-use crate::RunEndEncoding;
-
-impl ComputeVTable for RunEndEncoding {
-    fn fill_null_fn(&self) -> Option<&dyn FillNullFn<&dyn Array>> {
-        Some(self)
-    }
-
-    fn is_sorted_fn(&self) -> Option<&dyn IsSortedFn<&dyn Array>> {
-        Some(self)
-    }
-
-    fn scalar_at_fn(&self) -> Option<&dyn ScalarAtFn<&dyn Array>> {
-        Some(self)
-    }
-
-    fn slice_fn(&self) -> Option<&dyn SliceFn<&dyn Array>> {
-        Some(self)
-    }
-
-    fn take_fn(&self) -> Option<&dyn TakeFn<&dyn Array>> {
-        Some(self)
-    }
-
-    fn take_from_fn(&self) -> Option<&dyn TakeFromFn<&dyn Array>> {
-        Some(self)
-    }
-
-    fn min_max_fn(&self) -> Option<&dyn MinMaxFn<&dyn Array>> {
-        Some(self)
-    }
-}
-
 #[cfg(test)]
 mod test {
-    use vortex_array::Array;
+    use vortex_array::IntoArray;
     use vortex_array::arrays::PrimitiveArray;
     use vortex_array::compute::conformance::binary_numeric::test_numeric;
 

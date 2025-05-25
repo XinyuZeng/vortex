@@ -3,9 +3,10 @@
 #![feature(substr_range)]
 #![feature(trusted_len)]
 #![feature(array_chunks)]
+#![feature(iterator_try_collect)]
 //! Vortex crate containing core logic for encoding and memory representation of [arrays](ArrayRef).
 //!
-//! At the heart of Vortex are [arrays](ArrayRef) and [encodings](vtable::EncodingVTable).
+//! At the heart of Vortex are [arrays](ArrayRef) and [encodings](EncodingRef).
 //! Arrays are typed views of memory buffers that hold [scalars](vortex_scalar::Scalar). These
 //! buffers can be held in a number of physical encodings to perform lightweight compression that
 //! exploits the particular data distribution of the array's values.
@@ -21,7 +22,6 @@ pub use metadata::*;
 
 pub mod accessor;
 pub mod aliases;
-pub mod arcref;
 mod array;
 pub mod arrays;
 pub mod arrow;
@@ -30,12 +30,13 @@ mod canonical;
 pub mod compress;
 pub mod compute;
 mod context;
+pub mod data;
 mod encoding;
 pub mod iter;
 mod metadata;
-pub mod nbytes;
 mod partial_ord;
 pub mod patches;
+pub mod search_sorted;
 pub mod serde;
 pub mod stats;
 pub mod stream;

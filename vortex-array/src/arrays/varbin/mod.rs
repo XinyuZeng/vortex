@@ -7,26 +7,45 @@ use vortex_dtype::{DType, NativePType, Nullability};
 use vortex_error::{
     VortexExpect as _, VortexResult, VortexUnwrap as _, vortex_bail, vortex_err, vortex_panic,
 };
-use vortex_mask::Mask;
 use vortex_scalar::Scalar;
 
-use crate::array::ArrayValidityImpl;
 use crate::arrays::varbin::builder::VarBinBuilder;
-use crate::arrays::varbin::serde::VarBinMetadata;
-use crate::compute::scalar_at;
 use crate::stats::{ArrayStats, StatsSetRef};
 use crate::validity::Validity;
-use crate::vtable::VTableRef;
-use crate::{
-    Array, ArrayImpl, ArrayRef, ArrayStatisticsImpl, Encoding, ProstMetadata, try_from_array_ref,
+use crate::vtable::{
+    ArrayVTable, NotSupported, VTable, ValidityHelper, ValidityVTableFromValidityHelper,
 };
+use crate::{Array, ArrayRef, EncodingId, EncodingRef, vtable};
 
 mod accessor;
 pub mod builder;
 mod canonical;
 mod compute;
+mod ops;
 mod serde;
-mod variants;
+
+vtable!(VarBin);
+
+impl VTable for VarBinVTable {
+    type Array = VarBinArray;
+    type Encoding = VarBinEncoding;
+    type ArrayVTable = Self;
+    type CanonicalVTable = Self;
+    type OperationsVTable = Self;
+    type ValidityVTable = ValidityVTableFromValidityHelper;
+    type VisitorVTable = Self;
+    type ComputeVTable = NotSupported;
+    type EncodeVTable = NotSupported;
+    type SerdeVTable = Self;
+
+    fn id(_encoding: &Self::Encoding) -> EncodingId {
+        EncodingId::new_ref("vortex.varbin")
+    }
+
+    fn encoding(_array: &Self::Array) -> EncodingRef {
+        EncodingRef::new_ref(VarBinEncoding.as_ref())
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct VarBinArray {
@@ -37,14 +56,8 @@ pub struct VarBinArray {
     stats_set: ArrayStats,
 }
 
-try_from_array_ref!(VarBinArray);
-
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct VarBinEncoding;
-impl Encoding for VarBinEncoding {
-    type Array = VarBinArray;
-    type Metadata = ProstMetadata<VarBinMetadata>;
-}
 
 impl VarBinArray {
     pub fn try_new(
@@ -75,10 +88,6 @@ impl VarBinArray {
     #[inline]
     pub fn offsets(&self) -> &ArrayRef {
         &self.offsets
-    }
-
-    pub fn validity(&self) -> &Validity {
-        &self.validity
     }
 
     /// Access the value bytes child buffer
@@ -157,7 +166,9 @@ impl VarBinArray {
         }
 
         // TODO(ngates): PrimitiveArrayTrait should have get_scalar(idx) -> Option<T> method
-        Ok(scalar_at(self.offsets(), index)
+        Ok(self
+            .offsets()
+            .scalar_at(index)
             .unwrap_or_else(|err| vortex_panic!(err, "Failed to get offset at index: {}", index))
             .as_ref()
             .try_into()
@@ -181,72 +192,23 @@ impl VarBinArray {
     }
 }
 
-impl ArrayValidityImpl for VarBinArray {
-    fn _is_valid(&self, index: usize) -> VortexResult<bool> {
-        self.validity.is_valid(index)
-    }
-
-    fn _all_valid(&self) -> VortexResult<bool> {
-        self.validity.all_valid()
-    }
-
-    fn _all_invalid(&self) -> VortexResult<bool> {
-        self.validity.all_invalid()
-    }
-
-    fn _validity_mask(&self) -> VortexResult<Mask> {
-        self.validity.to_mask(self.len())
+impl ValidityHelper for VarBinArray {
+    fn validity(&self) -> &Validity {
+        &self.validity
     }
 }
 
-impl ArrayImpl for VarBinArray {
-    type Encoding = VarBinEncoding;
-
-    fn _len(&self) -> usize {
-        self.offsets().len().saturating_sub(1)
+impl ArrayVTable<VarBinVTable> for VarBinVTable {
+    fn len(array: &VarBinArray) -> usize {
+        array.offsets().len().saturating_sub(1)
     }
 
-    fn _dtype(&self) -> &DType {
-        &self.dtype
+    fn dtype(array: &VarBinArray) -> &DType {
+        &array.dtype
     }
 
-    fn _vtable(&self) -> VTableRef {
-        VTableRef::new_ref(&VarBinEncoding)
-    }
-
-    fn _with_children(&self, children: &[ArrayRef]) -> VortexResult<Self> {
-        let new = match children.len() {
-            // Only the offsets array is mandatory
-            1 => {
-                let offsets = children[0].clone();
-                Self::try_new(
-                    offsets,
-                    self.bytes().clone(),
-                    self.dtype().clone(),
-                    self.validity().clone(),
-                )?
-            }
-            // If are provided with both an offsets and validity arrays
-            2 => {
-                let offsets = children[0].clone();
-                let validity_array = children[1].clone();
-                Self::try_new(
-                    offsets,
-                    self.bytes().clone(),
-                    self.dtype().clone(),
-                    Validity::Array(validity_array),
-                )?
-            }
-            _ => vortex_bail!("unexpected number of new children"),
-        };
-
-        Ok(new)
-    }
-}
-
-impl ArrayStatisticsImpl for VarBinArray {
-    fn _stats_ref(&self) -> StatsSetRef<'_> {
-        self.stats_set.to_ref(self)
+    fn stats(array: &VarBinArray) -> StatsSetRef<'_> {
+        array.stats_set.to_ref(array.as_ref())
     }
 }
 
@@ -314,12 +276,10 @@ mod test {
     use vortex_buffer::Buffer;
     use vortex_dtype::{DType, Nullability};
 
-    use crate::ArrayRef;
-    use crate::array::Array;
     use crate::arrays::primitive::PrimitiveArray;
     use crate::arrays::varbin::VarBinArray;
-    use crate::compute::{scalar_at, slice};
     use crate::validity::Validity;
+    use crate::{Array, ArrayRef, IntoArray};
 
     #[fixture]
     fn binary_array() -> ArrayRef {
@@ -339,18 +299,18 @@ mod test {
     #[rstest]
     pub fn test_scalar_at(binary_array: ArrayRef) {
         assert_eq!(binary_array.len(), 2);
-        assert_eq!(scalar_at(&binary_array, 0).unwrap(), "hello world".into());
+        assert_eq!(binary_array.scalar_at(0).unwrap(), "hello world".into());
         assert_eq!(
-            scalar_at(&binary_array, 1).unwrap(),
+            binary_array.scalar_at(1).unwrap(),
             "hello world this is a long string".into()
         )
     }
 
     #[rstest]
     pub fn slice_array(binary_array: ArrayRef) {
-        let binary_arr = slice(&binary_array, 1, 2).unwrap();
+        let binary_arr = binary_array.slice(1, 2).unwrap();
         assert_eq!(
-            scalar_at(&binary_arr, 0).unwrap(),
+            binary_arr.scalar_at(0).unwrap(),
             "hello world this is a long string".into()
         );
     }

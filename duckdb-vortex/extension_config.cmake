@@ -5,6 +5,3 @@ duckdb_extension_load(vortex
     SOURCE_DIR ${CMAKE_CURRENT_LIST_DIR}
     LOAD_TESTS
 )
-
-duckdb_extension_load(tpch)
-duckdb_extension_load(tpcds)

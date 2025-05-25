@@ -22,7 +22,7 @@ mod primitive;
 mod proto;
 mod pvalue;
 mod scalar_type;
-mod scalarvalue;
+mod scalar_value;
 mod struct_;
 mod utf8;
 
@@ -34,7 +34,7 @@ pub use extension::*;
 pub use list::*;
 pub use primitive::*;
 pub use pvalue::*;
-pub use scalarvalue::*;
+pub use scalar_value::*;
 pub use struct_::*;
 pub use utf8::*;
 use vortex_error::{VortexExpect, VortexResult, vortex_bail};
@@ -89,8 +89,7 @@ impl Scalar {
     pub fn null(dtype: DType) -> Self {
         assert!(
             dtype.is_nullable(),
-            "Creating null scalar for non-nullable DType {}",
-            dtype
+            "Creating null scalar for non-nullable DType {dtype}"
         );
         Self {
             dtype,
@@ -566,8 +565,7 @@ mod test {
                     .to_string()
                     .contains("Can't cast u16 scalar 1000u16 to u8 (cause: Cannot read primitive value U16(1000) as u8")
             }),
-            "{:?}",
-            result
+            "{result:?}"
         );
     }
 }

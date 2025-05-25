@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use std::{env, fs};
 
 use anyhow::anyhow;
 use bench_vortex::ddb::{DuckDBExecutor, register_tables};
@@ -8,7 +9,7 @@ use bench_vortex::df::write_execution_plan;
 use bench_vortex::display::{DisplayFormat, print_measurements_json, render_table};
 use bench_vortex::measurements::QueryMeasurement;
 use bench_vortex::metrics::{MetricsSetExt, export_plan_spans};
-use bench_vortex::tpch::dbgen::{DBGen, DBGenOptions};
+use bench_vortex::tpch::duckdb::{DuckdbTpcOptions, TpcDataset, generate_tpc};
 use bench_vortex::tpch::{
     EXPECTED_ROW_COUNTS_SF1, EXPECTED_ROW_COUNTS_SF10, TPC_H_ROW_COUNT_ARRAY_LENGTH, load_datasets,
     run_tpch_query, tpch_queries,
@@ -16,7 +17,7 @@ use bench_vortex::tpch::{
 use bench_vortex::utils::constants::TPCH_DATASET;
 use bench_vortex::utils::new_tokio_runtime;
 use bench_vortex::{
-    BenchmarkDataset, Engine, Format, Target, ddb, default_env_filter, vortex_panic,
+    BenchmarkDataset, Engine, Format, IdempotentPath, Target, ddb, default_env_filter, vortex_panic,
 };
 use clap::{Parser, ValueEnum, value_parser};
 use datafusion::execution::context::SessionContext;
@@ -25,6 +26,7 @@ use datafusion::physical_plan::metrics::{Label, MetricsSet};
 use indicatif::ProgressBar;
 use itertools::Itertools;
 use log::{info, warn};
+use similar::{ChangeTag, TextDiff};
 use tempfile::tempdir;
 use url::Url;
 use vortex::aliases::hash_map::HashMap;
@@ -73,9 +75,8 @@ struct Args {
     export_spans: bool,
     #[arg(long, default_value_t = false)]
     emit_plan: bool,
-    // Don't try to rebuild duckdb
     #[arg(long)]
-    skip_rebuild: bool,
+    skip_duckdb_build: bool,
 }
 
 #[derive(ValueEnum, Default, Clone, Debug, PartialEq, Eq)]
@@ -123,34 +124,34 @@ fn main() -> anyhow::Result<()> {
         _guard
     };
 
+    let formats = args.targets.iter().map(|t| t.format()).collect_vec();
+
     let runtime = new_tokio_runtime(args.threads);
+
+    let duckdb_resolved_path = ddb::duckdb_executable_path(&args.duckdb_path);
+    if args.duckdb_path.is_none() && !args.skip_duckdb_build {
+        ddb::build_vortex_duckdb();
+    }
 
     let url = match args.use_remote_data_dir {
         None => {
-            let data_dir = match args.data_generator {
-                DataGenerator::Dbgen => {
-                    let db_gen_options =
-                        DBGenOptions::default().with_scale_factor(args.scale_factor);
-                    DBGen::new(db_gen_options).generate()?
-                }
-                DataGenerator::Duckdb => todo!("not implemented yet, will be support this soon"),
-                // TODO(joe) re-enable this once its correct.
-                // DataGenerator::Duckdb => {
-                //     generate_tpc(DuckdbTpcOptions::default().with_scale_factor(args.scale_factor))?
-                // }
-            };
+            for format in formats {
+                // Arrow uses csv
+                let format = if format == Format::Arrow {
+                    Format::Csv
+                } else {
+                    format
+                };
+                let opts = DuckdbTpcOptions::new("tpch".to_data_path(), TpcDataset::TpcH, format)
+                    .with_duckdb_path(duckdb_resolved_path.clone());
+                generate_tpc(opts)?;
+            }
 
-            info!(
-                "Using existing or generating new files located at {}.",
-                data_dir.display()
-            );
-            Url::parse(
-                format!(
-                    "file:{}/",
-                    data_dir.to_str().vortex_expect("path should be utf8")
-                )
-                .as_ref(),
-            )?
+            let data_dir = "tpch".to_data_path();
+            let data_dir = data_dir.to_str().vortex_expect("path must be utf8");
+
+            info!("Using existing or generating new files located at {data_dir}.");
+            Url::parse(format!("file:{data_dir}/{}/", args.scale_factor).as_ref())?
         }
         Some(tpch_benchmark_remote_data_dir) => {
             // e.g. "s3://vortex-bench-dev-eu/parquet/"
@@ -187,8 +188,7 @@ fn main() -> anyhow::Result<()> {
         args.all_metrics,
         args.export_spans,
         args.emit_plan,
-        &args.duckdb_path,
-        args.skip_rebuild,
+        duckdb_resolved_path,
     ))
 }
 
@@ -227,7 +227,7 @@ fn verify_row_counts(
                 if actual_row_count != expected_row_counts[idx] {
                     if idx == 15 && actual_row_count == 0 {
                         warn!(
-                            "*IGNORING* mismatched row count {} instead of {} for format {:?} because Query 15 is flaky. See: https://github.com/spiraldb/vortex/issues/2395",
+                            "*IGNORING* mismatched row count {} instead of {} for format {:?} because Query 15 is flaky. See: https://github.com/vortex-data/vortex/issues/2395",
                             actual_row_count,
                             expected_row_counts[idx],
                             format,
@@ -306,8 +306,7 @@ async fn bench_main(
     display_all_metrics: bool,
     export_spans: bool,
     emit_plan: bool,
-    duckdb_path: &Option<PathBuf>,
-    skip_duckdb_build: bool,
+    duckdb_resolved_path: PathBuf,
 ) -> anyhow::Result<()> {
     let expected_row_counts = if scale_factor == 1 {
         EXPECTED_ROW_COUNTS_SF1
@@ -346,17 +345,18 @@ async fn bench_main(
 
     assert!(!tpch_queries.is_empty(), "No queries to run");
 
-    let duckdb_resolved_path = targets
-        .iter()
-        .any(|t| t.engine() == Engine::DuckDB)
-        .then(|| ddb::build_and_get_executable_path(duckdb_path, skip_duckdb_build));
-
     for target in &targets {
         let engine = target.engine();
         let format = target.format();
         match engine {
             Engine::DataFusion => {
-                let ctx = load_datasets(&url, format, disable_datafusion_cache).await?;
+                let ctx = load_datasets(
+                    &url,
+                    format,
+                    BenchmarkDataset::TpcH,
+                    disable_datafusion_cache,
+                )
+                .await?;
 
                 let mut plans = Vec::new();
 
@@ -408,13 +408,12 @@ async fn bench_main(
             }
             // TODO(joe); ensure that files are downloaded before running duckdb.
             Engine::DuckDB => {
-                let duckdb_path = duckdb_resolved_path.as_ref().vortex_expect("created above");
                 let temp_dir = tempdir()?;
                 let duckdb_file = temp_dir
                     .path()
                     .join(format!("duckdb-file-{}.db", format.name()));
 
-                let executor = DuckDBExecutor::new(duckdb_path.clone(), duckdb_file);
+                let executor = DuckDBExecutor::new(duckdb_resolved_path.clone(), duckdb_file);
                 register_tables(&executor, &url, format, BenchmarkDataset::TpcH)?;
 
                 for (query_idx, sql_queries) in tpch_queries.clone() {
@@ -435,7 +434,7 @@ async fn bench_main(
                 }
             }
             _ => {
-                warn!("Engine {:?} not supported for TPC-H benchmarks", engine);
+                warn!("Engine {engine:?} not supported for TPC-H benchmarks");
             }
         }
     }
@@ -448,7 +447,7 @@ async fn bench_main(
                 metrics = metrics.aggregate();
             }
             for m in metrics.timestamps_removed().sorted_for_display().iter() {
-                println!("{}", m);
+                println!("{m}");
             }
             render_table(measurements, &targets)?;
         }
@@ -458,10 +457,78 @@ async fn bench_main(
     }
 
     if verify_row_counts(&row_counts, expected_row_counts, &queries, &exclude_queries) {
-        Err(anyhow!("Mismatched row counts. See logs for details."))
-    } else {
-        anyhow::Ok(())
+        return Err(anyhow!("Mismatched row counts. See logs for details."));
     }
+
+    if targets.iter().any(|t| t.engine() == Engine::DuckDB) {
+        verify_duckdb_tpch_results(scale_factor, duckdb_resolved_path)?;
+    }
+
+    anyhow::Ok(())
+}
+
+fn verify_duckdb_tpch_results(scale_factor: u8, duckdb_path: PathBuf) -> anyhow::Result<()> {
+    let query_dir = PathBuf::from("duckdb-vortex/duckdb/extension/tpch/dbgen/queries");
+    let tmp_dir = format!(
+        "{}/spiral-tpch",
+        // $RUNNER_TEMP is defined by GitHub Actions.
+        env::var("TMPDIR").unwrap_or(env::var("RUNNER_TEMP")?)
+    );
+    if PathBuf::from(&tmp_dir).exists() {
+        fs::remove_dir_all(&tmp_dir)?;
+    }
+    fs::create_dir(&tmp_dir)?;
+    let db_path = format!("{tmp_dir}/tpch_results_sf.db");
+
+    let executor = DuckDBExecutor::new(duckdb_path, &db_path);
+    ddb::execute_tpch_query(&[format!("CALL dbgen(sf={})", scale_factor)], &executor)?;
+
+    let query_files = fs::read_dir(query_dir)?
+        .filter_map(Result::ok)
+        .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "sql"))
+        .collect::<Vec<_>>();
+
+    for query_file in &query_files {
+        let query_file_path = query_file.path();
+        let query_name = query_file_path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .ok_or_else(|| anyhow!("Invalid query filename"))?;
+
+        let create_table = format!(
+            "CREATE OR REPLACE TABLE {query_name}_result AS {};",
+            fs::read_to_string(&query_file_path)?
+        );
+
+        let csv_actual = format!("{tmp_dir}/{query_name}.csv");
+        let write_csv =
+            format!("COPY {query_name}_result TO '{csv_actual}' (HEADER, DELIMITER '|');",);
+
+        ddb::execute_tpch_query(&[create_table, write_csv], &executor)?;
+
+        let csv_expected = format!("bench-vortex/tpch_results/duckdb/{query_name}.csv");
+        let expected = fs::read_to_string(csv_expected)?;
+        let actual = fs::read_to_string(csv_actual)?;
+
+        if expected != actual {
+            let diff = TextDiff::from_lines(&expected, &actual);
+
+            for change in diff.iter_all_changes() {
+                let sign = match change.tag() {
+                    ChangeTag::Delete => "-",
+                    ChangeTag::Insert => "+",
+                    ChangeTag::Equal => " ",
+                };
+                print!("{}{}", sign, change);
+            }
+
+            return Err(anyhow!(format!(
+                "query output does not match the reference for {query_name}"
+            )));
+        }
+    }
+
+    Ok(())
 }
 
 fn validate_args(engines: &[Engine], args: &Args) {

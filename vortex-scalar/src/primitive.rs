@@ -24,7 +24,7 @@ impl Display for PrimitiveScalar<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self.pvalue {
             None => write!(f, "null"),
-            Some(pv) => write!(f, "{}", pv),
+            Some(pv) => write!(f, "{pv}"),
         }
     }
 }
@@ -331,6 +331,17 @@ impl TryFrom<&Scalar> for usize {
             .as_::<u64>()?
             .ok_or_else(|| vortex_err!("cannot convert Null to usize"))?;
         Ok(usize::try_from(prim)?)
+    }
+}
+
+impl TryFrom<&Scalar> for Option<usize> {
+    type Error = VortexError;
+
+    fn try_from(value: &Scalar) -> Result<Self, Self::Error> {
+        Ok(PrimitiveScalar::try_from(value)?
+            .as_::<u64>()?
+            .map(usize::try_from)
+            .transpose()?)
     }
 }
 

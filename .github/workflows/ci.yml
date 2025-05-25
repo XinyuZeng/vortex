@@ -23,12 +23,14 @@ env:
 jobs:
   lint-toml:
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
       - uses: spiraldb/actions/.github/actions/lint-toml@0.10.0
 
   validate-workflow-yaml:
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
         with:
@@ -44,12 +46,13 @@ jobs:
   python-lint:
     name: "Python (lint)"
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: "recursive"
       - name: Install uv
-        uses: spiraldb/actions/.github/actions/setup-uv@0.10.0
+        uses: spiraldb/actions/.github/actions/setup-uv@0.11.0
         with:
           sync: false
       - name: Python Lint - Format
@@ -60,6 +63,7 @@ jobs:
   python-test:
     name: "Python (test)"
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     env:
       RUST_LOG: "info,uv=debug"
     steps:
@@ -70,20 +74,20 @@ jobs:
       - uses: rui314/setup-mold@v1
       - uses: ./.github/actions/setup-rust
       - name: Install uv
-        uses: spiraldb/actions/.github/actions/setup-uv@0.10.0
+        uses: spiraldb/actions/.github/actions/setup-uv@0.11.0
         with:
           sync: false
 
       # Ensure the stub files are up-to-date with the public API of the native module.
-      - name: Stubtest - PyVortex
+      - name: Stubtest - Vortex
         run: |
           uv run --isolated --all-packages stubtest vortex._lib --allowlist python/vortex/_lib/mypy.allowlist
-        working-directory: pyvortex/
+        working-directory: vortex-python/
 
-      - name: Pytest - PyVortex
+      - name: Pytest - Vortex
         run: |
           uv run --isolated --all-packages pytest --benchmark-disable test/
-        working-directory: pyvortex/
+        working-directory: vortex-python/
 
       - name: Doctest - PyVortex
         run: |
@@ -95,7 +99,7 @@ jobs:
           uv run --isolated --all-packages make html
         working-directory: docs/
 
-      - uses: mlugg/setup-zig@v1
+      - uses: mlugg/setup-zig@v2
       - name: Ensure wheel and sdist can be built on Linux - PyVortex
         shell: bash
         run: |
@@ -104,8 +108,8 @@ jobs:
 
           uv venv
           uv pip install "maturin[zig]"
-          uv tool run maturin build --interpreter python3.10 --zig
-          uv tool run maturin build --interpreter python3.10 --zig --sdist
+          uv tool run maturin build --interpreter python3.11 --zig
+          uv tool run maturin build --interpreter python3.11 --zig --sdist
 
           file_count=$(ls -1 ../target/wheels/ | wc -l)
 
@@ -116,10 +120,11 @@ jobs:
           else
             echo "Generated two files"
           fi
-        working-directory: pyvortex/
+        working-directory: vortex-python/
 
   rust-docs:
     name: "Rust (docs)"
+    timeout-minutes: 120
     runs-on:
       - runs-on=${{ github.run_id }}
       - family=m7i+m7i-flex+m7a
@@ -135,10 +140,11 @@ jobs:
         run: |
           cargo doc --no-deps
           # nextest doesn't support doc tests, so we run it here
-          cargo test --doc --workspace --all-features --exclude pyvortex --exclude vortex-jni --exclude vortex-ffi --exclude xtask --no-fail-fast
+          cargo test --doc --workspace --all-features --exclude vortex-python --exclude vortex-jni --exclude vortex-ffi --exclude xtask --no-fail-fast
 
   build-rust:
     name: "Rust build (${{matrix.config.name}})"
+    timeout-minutes: 120
     runs-on:
       - runs-on=${{ github.run_id }}
       - family=m7i+m7i-flex+m7a
@@ -191,6 +197,7 @@ jobs:
 
   build-duckdb:
     name: "DuckDB extension build"
+    timeout-minutes: 120
     runs-on:
       - runs-on=${{ github.run_id }}
       - family=m7i+m7i-flex+m7a
@@ -220,6 +227,7 @@ jobs:
 
   check-min-deps:
     name: "Check build with minimal dependencies"
+    timeout-minutes: 120
     runs-on:
       - runs-on=${{ github.run_id }}
       - family=m7i+m7i-flex+m7a
@@ -239,6 +247,7 @@ jobs:
 
   rust-lint:
     name: "Rust (lint)"
+    timeout-minutes: 120
     runs-on:
       - runs-on=${{ github.run_id }}
       - family=m7i+m7i-flex+m7a
@@ -251,7 +260,6 @@ jobs:
         with:
           submodules: "recursive"
       - uses: rui314/setup-mold@v1
-      - uses: ./.github/actions/setup-c++
       - name: Rust Lint - Format
         run: cargo fmt --all --check
       - name: Rustc check
@@ -260,6 +268,22 @@ jobs:
         run: cargo clippy --locked --all-features --all-targets
       - name: Rust Lint - Clippy Default Features
         run: cargo clippy --locked --all-targets
+
+  rust-lint-no-default:
+    name: "Rust (lint, no default)"
+    timeout-minutes: 120
+    runs-on:
+      - runs-on=${{ github.run_id }}
+      - family=m7i+m7i-flex+m7a
+      - cpu=16
+      - image=ubuntu24-full-x64
+      - tag=rust-lint
+    steps:
+      - uses: runs-on/action@v1
+      - uses: actions/checkout@v4
+        with:
+          submodules: "recursive"
+      - uses: rui314/setup-mold@v1
       - name: Install cargo-hack
         uses: taiki-e/install-action@cargo-hack
       - name: Rust Lint - Clippy No Default Features
@@ -270,6 +294,7 @@ jobs:
 
   rust-test:
     name: "Rust (tests)"
+    timeout-minutes: 120
     runs-on:
       - runs-on=${{ github.run_id }}
       - family=m7i+m7i-flex+m7a
@@ -321,8 +346,25 @@ jobs:
         with:
           file: ${{ env.GRCOV_OUTPUT_FILE }}
 
+  build-java:
+    name: "Java"
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: "recursive"
+      - uses: ./.github/actions/cleanup
+      - uses: ./.github/actions/setup-rust
+      # TODO(ngates): we should run tests here when they pass!
+      - run: ./gradlew shadowJar
+        working-directory: ./java
+
   bench-codspeed:
     name: Benchmark with Codspeed
+    timeout-minutes: 120
     runs-on:
       - runs-on=${{ github.run_id }}
       - family=c6id.8xlarge
@@ -349,7 +391,7 @@ jobs:
             --exclude vortex-datafusion \
             --exclude vortex-tui \
             --exclude vortex-fuzz \
-            --exclude pyvortex \
+            --exclude vortex-python \
             --exclude xtask \
             --workspace \
             --profile bench
@@ -364,6 +406,7 @@ jobs:
   license-check-and-audit-check:
     name: License Check and Audit Check
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     strategy:
       matrix:
         checks:
@@ -382,6 +425,7 @@ jobs:
   wasm-integration:
     name: "wasm-integration"
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     steps:
       - uses: rui314/setup-mold@v1
       - uses: actions/checkout@v4
@@ -390,7 +434,7 @@ jobs:
           targets: "wasm32-wasip1"
       - name: Setup Wasmer
         uses: wasmerio/setup-wasmer@v3.1
-      - run: cargo build --target wasm32-wasip1
+      - run: cargo -Zbuild-std=panic_abort,std build --target wasm32-wasip1
         working-directory: ./wasm-test
       - run: wasmer run ./target/wasm32-wasip1/debug/wasm-test.wasm
         working-directory: ./wasm-test
@@ -398,6 +442,7 @@ jobs:
   miri:
     name: "miri"
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     env:
       MIRIFLAGS: -Zmiri-strict-provenance -Zmiri-symbolic-alignment-check -Zmiri-backtrace=full -Zmiri-disable-isolation
       RUSTFLAGS: "-A warnings"
@@ -420,6 +465,7 @@ jobs:
   generated-files:
     name: "Check generated proto/fbs files are up to date"
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
         with:

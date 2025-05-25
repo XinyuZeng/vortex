@@ -1,5 +1,5 @@
 //! Each [`LayoutWriter`] is passed horizontal chunks of a Vortex array one-by-one, and is
-//! eventually asked to return a [`crate::Layout`]. The writers can buffer, re-chunk, flush, or
+//! eventually asked to return a [`crate::LayoutData`]. The writers can buffer, re-chunk, flush, or
 //! otherwise manipulate the chunks of data enabling experimentation with different strategies
 //! all while remaining independent of the read code.
 
@@ -22,7 +22,8 @@ pub struct StructStrategy;
 impl LayoutStrategy for StructStrategy {
     fn new_writer(&self, ctx: &ArrayContext, dtype: &DType) -> VortexResult<Box<dyn LayoutWriter>> {
         if let DType::Struct(..) = dtype {
-            StructLayoutWriter::try_new_with_strategy(ctx, dtype, StructStrategy).map(|w| w.boxed())
+            StructLayoutWriter::try_new_with_strategy(ctx, dtype, &StructStrategy)
+                .map(|w| w.boxed())
         } else {
             Ok(FlatLayoutWriter::new(ctx.clone(), dtype.clone(), Default::default()).boxed())
         }

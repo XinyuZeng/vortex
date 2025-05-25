@@ -1,11 +1,11 @@
-use vortex_array::compute::{TakeFromFn, take};
-use vortex_array::{Array, ArrayRef};
+use vortex_array::compute::{TakeFromKernel, TakeFromKernelAdapter, take};
+use vortex_array::{Array, ArrayRef, IntoArray, register_kernel};
 use vortex_dtype::DType;
 use vortex_error::VortexResult;
 
-use crate::{RunEndArray, RunEndEncoding};
+use crate::{RunEndArray, RunEndVTable};
 
-impl TakeFromFn<&RunEndArray> for RunEndEncoding {
+impl TakeFromKernel for RunEndVTable {
     /// Takes values from the source array using run-end encoded indices.
     ///
     /// # Arguments
@@ -43,3 +43,5 @@ impl TakeFromFn<&RunEndArray> for RunEndEncoding {
         Ok(Some(ree_array.into_array()))
     }
 }
+
+register_kernel!(TakeFromKernelAdapter(RunEndVTable).lift());

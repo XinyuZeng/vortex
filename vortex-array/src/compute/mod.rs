@@ -6,40 +6,34 @@
 //! Every array encoding has the ability to implement their own efficient implementations of these
 //! operators, else we will decode, and perform the equivalent operator from Arrow.
 
-use std::any::Any;
+use std::any::{Any, type_name};
 use std::fmt::{Debug, Formatter};
-use std::sync::RwLock;
 
+use arcref::ArcRef;
 pub use between::*;
 pub use boolean::*;
 pub use cast::*;
 pub use compare::*;
-pub use fill_null::{FillNullFn, fill_null};
+pub use fill_null::*;
 pub use filter::*;
 pub use invert::*;
 pub use is_constant::*;
 pub use is_sorted::*;
 use itertools::Itertools;
-pub use like::{LikeFn, LikeOptions, like};
+pub use like::*;
 pub use list::*;
 pub use mask::*;
-pub use min_max::{MinMaxFn, MinMaxResult, min_max};
+pub use min_max::*;
 pub use nan_count::*;
 pub use numeric::*;
-pub use optimize::*;
-pub use scalar_at::{ScalarAtFn, scalar_at};
-pub use search_sorted::*;
-pub use slice::{SliceFn, slice};
+use parking_lot::RwLock;
 pub use sum::*;
-pub use take::{TakeFn, take, take_into};
-pub use take_from::TakeFromFn;
-pub use uncompressed_size::*;
+pub use take::*;
 use vortex_dtype::DType;
-use vortex_error::{VortexExpect, VortexResult, vortex_bail};
+use vortex_error::{VortexError, VortexResult, vortex_bail, vortex_err};
 use vortex_mask::Mask;
 use vortex_scalar::Scalar;
 
-use crate::arcref::ArcRef;
 use crate::builders::ArrayBuilder;
 use crate::{Array, ArrayRef};
 
@@ -62,14 +56,8 @@ mod mask;
 mod min_max;
 mod nan_count;
 mod numeric;
-mod optimize;
-mod scalar_at;
-mod search_sorted;
-mod slice;
 mod sum;
 mod take;
-mod take_from;
-mod uncompressed_size;
 
 /// An instance of a compute function holding the implementation vtable and a set of registered
 /// compute kernels.
@@ -96,10 +84,7 @@ impl ComputeFn {
 
     /// Register a kernel for the compute function.
     pub fn register_kernel(&self, kernel: ArcRef<dyn Kernel>) {
-        self.kernels
-            .write()
-            .vortex_expect("poisoned lock")
-            .push(kernel);
+        self.kernels.write().push(kernel);
     }
 
     /// Invokes the compute function with the given arguments.
@@ -124,9 +109,7 @@ impl ComputeFn {
         let expected_dtype = self.vtable.return_dtype(args)?;
         let expected_len = self.vtable.return_len(args)?;
 
-        let output = self
-            .vtable
-            .invoke(args, &self.kernels.read().vortex_expect("poisoned lock"))?;
+        let output = self.vtable.invoke(args, &self.kernels.read())?;
 
         if output.dtype() != &expected_dtype {
             vortex_bail!(
@@ -162,6 +145,11 @@ impl ComputeFn {
     pub fn is_elementwise(&self) -> bool {
         // TODO(ngates): should this just be a constant passed in the constructor?
         self.vtable.is_elementwise()
+    }
+
+    /// Returns the compute function's kernels.
+    pub fn kernels(&self) -> Vec<ArcRef<dyn Kernel>> {
+        self.kernels.read().to_vec()
     }
 }
 
@@ -201,6 +189,58 @@ pub trait ComputeFnVTable: 'static + Send + Sync {
 pub struct InvocationArgs<'a> {
     pub inputs: &'a [Input<'a>],
     pub options: &'a dyn Options,
+}
+
+/// For unary compute functions, it's useful to just have this short-cut.
+pub struct UnaryArgs<'a, O: Options> {
+    pub array: &'a dyn Array,
+    pub options: &'a O,
+}
+
+impl<'a, O: Options> TryFrom<&InvocationArgs<'a>> for UnaryArgs<'a, O> {
+    type Error = VortexError;
+
+    fn try_from(value: &InvocationArgs<'a>) -> Result<Self, Self::Error> {
+        if value.inputs.len() != 1 {
+            vortex_bail!("Expected 1 input, found {}", value.inputs.len());
+        }
+        let array = value.inputs[0]
+            .array()
+            .ok_or_else(|| vortex_err!("Expected input 0 to be an array"))?;
+        let options =
+            value.options.as_any().downcast_ref::<O>().ok_or_else(|| {
+                vortex_err!("Expected options to be of type {}", type_name::<O>())
+            })?;
+        Ok(UnaryArgs { array, options })
+    }
+}
+
+/// For binary compute functions, it's useful to just have this short-cut.
+pub struct BinaryArgs<'a, O: Options> {
+    pub lhs: &'a dyn Array,
+    pub rhs: &'a dyn Array,
+    pub options: &'a O,
+}
+
+impl<'a, O: Options> TryFrom<&InvocationArgs<'a>> for BinaryArgs<'a, O> {
+    type Error = VortexError;
+
+    fn try_from(value: &InvocationArgs<'a>) -> Result<Self, Self::Error> {
+        if value.inputs.len() != 2 {
+            vortex_bail!("Expected 2 input, found {}", value.inputs.len());
+        }
+        let lhs = value.inputs[0]
+            .array()
+            .ok_or_else(|| vortex_err!("Expected input 0 to be an array"))?;
+        let rhs = value.inputs[1]
+            .array()
+            .ok_or_else(|| vortex_err!("Expected input 1 to be an array"))?;
+        let options =
+            value.options.as_any().downcast_ref::<O>().ok_or_else(|| {
+                vortex_err!("Expected options to be of type {}", type_name::<O>())
+            })?;
+        Ok(BinaryArgs { lhs, rhs, options })
+    }
 }
 
 /// Input to a compute function.
@@ -311,15 +351,15 @@ impl Output {
     }
 
     pub fn unwrap_scalar(self) -> VortexResult<Scalar> {
-        match &self {
+        match self {
             Output::Array(_) => vortex_bail!("Expected array output, got Array"),
-            Output::Scalar(scalar) => Ok(scalar.clone()),
+            Output::Scalar(scalar) => Ok(scalar),
         }
     }
 
     pub fn unwrap_array(self) -> VortexResult<ArrayRef> {
-        match &self {
-            Output::Array(array) => Ok(array.clone()),
+        match self {
+            Output::Array(array) => Ok(array),
             Output::Scalar(_) => vortex_bail!("Expected array output, got Scalar"),
         }
     }
@@ -338,7 +378,7 @@ impl From<Scalar> for Output {
 }
 
 /// Options for a compute function invocation.
-pub trait Options {
+pub trait Options: 'static {
     fn as_any(&self) -> &dyn Any;
 }
 
@@ -352,7 +392,9 @@ impl Options for () {
 ///
 /// The kernel is invoked with the input arguments and options, and can return `None` if it is
 /// unable to compute the result for the given inputs due to missing implementation logic.
-/// For example, if kernel doesn't support the `LTE` operator.
+/// For example, if kernel doesn't support the `LTE` operator. By returning `None`, the kernel
+/// is indicating that it cannot compute the result for the given inputs, and another kernel should
+/// be tried. *Not* that the given inputs are invalid for the compute function.
 ///
 /// If the kernel fails to compute a result, it should return a `Some` with the error.
 pub trait Kernel: 'static + Send + Sync + Debug {

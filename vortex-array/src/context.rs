@@ -1,22 +1,22 @@
 use std::fmt::Display;
-use std::sync::{Arc, RwLock, RwLockReadGuard};
+use std::sync::Arc;
 
 use itertools::Itertools;
+use parking_lot::RwLock;
 use vortex_error::{VortexExpect, VortexResult, vortex_err};
 
+use crate::EncodingRef;
 use crate::aliases::hash_map::HashMap;
 use crate::arrays::{
     BoolEncoding, ChunkedEncoding, ConstantEncoding, DecimalEncoding, ExtensionEncoding,
     ListEncoding, NullEncoding, PrimitiveEncoding, StructEncoding, VarBinEncoding,
     VarBinViewEncoding,
 };
-use crate::encoding::Encoding;
-use crate::vtable::VTableRef;
 
 /// A collection of array encodings.
 // TODO(ngates): it feels weird that this has interior mutability. I think maybe it shouldn't.
-pub type ArrayContext = VTableContext<VTableRef>;
-pub type ArrayRegistry = VTableRegistry<VTableRef>;
+pub type ArrayContext = VTableContext<EncodingRef>;
+pub type ArrayRegistry = VTableRegistry<EncodingRef>;
 
 impl ArrayRegistry {
     pub fn canonical_only() -> Self {
@@ -24,19 +24,22 @@ impl ArrayRegistry {
 
         // Register the canonical encodings
         this.register_many([
-            NullEncoding.vtable(),
-            BoolEncoding.vtable(),
-            PrimitiveEncoding.vtable(),
-            DecimalEncoding.vtable(),
-            StructEncoding.vtable(),
-            ListEncoding.vtable(),
-            VarBinEncoding.vtable(),
-            VarBinViewEncoding.vtable(),
-            ExtensionEncoding.vtable(),
+            EncodingRef::new_ref(NullEncoding.as_ref()) as EncodingRef,
+            EncodingRef::new_ref(BoolEncoding.as_ref()),
+            EncodingRef::new_ref(PrimitiveEncoding.as_ref()),
+            EncodingRef::new_ref(DecimalEncoding.as_ref()),
+            EncodingRef::new_ref(StructEncoding.as_ref()),
+            EncodingRef::new_ref(ListEncoding.as_ref()),
+            EncodingRef::new_ref(VarBinEncoding.as_ref()),
+            EncodingRef::new_ref(VarBinViewEncoding.as_ref()),
+            EncodingRef::new_ref(ExtensionEncoding.as_ref()),
         ]);
 
         // Register the utility encodings
-        this.register_many([ConstantEncoding.vtable(), ChunkedEncoding.vtable()]);
+        this.register_many([
+            EncodingRef::new_ref(ConstantEncoding.as_ref()) as EncodingRef,
+            EncodingRef::new_ref(ChunkedEncoding.as_ref()),
+        ]);
 
         this
     }
@@ -54,7 +57,7 @@ impl<T: Clone + Eq> VTableContext<T> {
 
     pub fn with(self, encoding: T) -> Self {
         {
-            let mut write = self.0.write().vortex_expect("poisoned lock");
+            let mut write = self.0.write();
             if write.iter().all(|e| e != &encoding) {
                 write.push(encoding);
             }
@@ -66,13 +69,13 @@ impl<T: Clone + Eq> VTableContext<T> {
         items.into_iter().fold(self, |ctx, e| ctx.with(e))
     }
 
-    pub fn encodings(&self) -> RwLockReadGuard<Vec<T>> {
-        self.0.read().vortex_expect("poisoned lock")
+    pub fn encodings(&self) -> Vec<T> {
+        self.0.read().clone()
     }
 
     /// Returns the index of the encoding in the context, or adds it if it doesn't exist.
     pub fn encoding_idx(&self, encoding: &T) -> u16 {
-        let mut write = self.0.write().vortex_expect("poisoned lock");
+        let mut write = self.0.write();
         if let Some(idx) = write.iter().position(|e| e == encoding) {
             return u16::try_from(idx).vortex_expect("Cannot have more than u16::MAX encodings");
         }
@@ -86,11 +89,7 @@ impl<T: Clone + Eq> VTableContext<T> {
 
     /// Find an encoding by its position.
     pub fn lookup_encoding(&self, idx: u16) -> Option<T> {
-        self.0
-            .read()
-            .vortex_expect("poisoned lock")
-            .get(idx as usize)
-            .cloned()
+        self.0.read().get(idx as usize).cloned()
     }
 }
 

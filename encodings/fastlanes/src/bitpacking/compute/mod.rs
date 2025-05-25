@@ -1,34 +1,7 @@
-use vortex_array::Array;
-use vortex_array::compute::{ScalarAtFn, SearchSortedFn, SliceFn, TakeFn};
-use vortex_array::vtable::ComputeVTable;
-
-use crate::BitPackedEncoding;
-
 mod between;
 mod filter;
 mod is_constant;
-mod scalar_at;
-mod search_sorted;
-mod slice;
 mod take;
-
-impl ComputeVTable for BitPackedEncoding {
-    fn scalar_at_fn(&self) -> Option<&dyn ScalarAtFn<&dyn Array>> {
-        Some(self)
-    }
-
-    fn search_sorted_fn(&self) -> Option<&dyn SearchSortedFn<&dyn Array>> {
-        Some(self)
-    }
-
-    fn slice_fn(&self) -> Option<&dyn SliceFn<&dyn Array>> {
-        Some(self)
-    }
-
-    fn take_fn(&self) -> Option<&dyn TakeFn<&dyn Array>> {
-        Some(self)
-    }
-}
 
 fn chunked_indices<F: FnMut(usize, &[usize])>(
     mut indices: impl Iterator<Item = usize>,

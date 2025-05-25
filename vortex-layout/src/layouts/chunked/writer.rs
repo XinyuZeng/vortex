@@ -1,17 +1,17 @@
 use std::sync::Arc;
 
-use vortex_array::arcref::ArcRef;
+use arcref::ArcRef;
 use vortex_array::{ArrayContext, ArrayRef};
 use vortex_dtype::DType;
 use vortex_error::{VortexExpect, VortexResult};
 
-use crate::data::Layout;
+use crate::children::OwnedLayoutChildren;
 use crate::layouts::chunked::ChunkedLayout;
 use crate::layouts::flat::writer::FlatLayoutStrategy;
 use crate::segments::SegmentWriter;
 use crate::strategy::LayoutStrategy;
 use crate::writer::LayoutWriter;
-use crate::{LayoutVTableRef, LayoutWriterExt};
+use crate::{IntoLayout, LayoutRef, LayoutWriterExt};
 
 #[derive(Clone)]
 pub struct ChunkedLayoutStrategy {
@@ -62,6 +62,14 @@ impl LayoutWriter for ChunkedLayoutWriter {
         segment_writer: &mut dyn SegmentWriter,
         chunk: ArrayRef,
     ) -> VortexResult<()> {
+        assert_eq!(
+            chunk.dtype(),
+            &self.dtype,
+            "Can't push chunks of the wrong dtype into a LayoutWriter. Pushed {} but expected {}.",
+            chunk.dtype(),
+            self.dtype
+        );
+
         self.row_count += chunk.len() as u64;
 
         // We write each chunk, but don't call finish quite yet to ensure that chunks have an
@@ -82,7 +90,7 @@ impl LayoutWriter for ChunkedLayoutWriter {
         Ok(())
     }
 
-    fn finish(&mut self, segment_writer: &mut dyn SegmentWriter) -> VortexResult<Layout> {
+    fn finish(&mut self, segment_writer: &mut dyn SegmentWriter) -> VortexResult<LayoutRef> {
         // Call finish on each chunk's writer
         let mut children = vec![];
         for writer in self.chunks.iter_mut() {
@@ -95,18 +103,12 @@ impl LayoutWriter for ChunkedLayoutWriter {
         if children.len() == 1 {
             return Ok(children.pop().vortex_expect("child layout"));
         }
-        Ok(chunked_layout(self.dtype.clone(), self.row_count, children))
-    }
-}
 
-pub(crate) fn chunked_layout(dtype: DType, row_count: u64, children: Vec<Layout>) -> Layout {
-    Layout::new_owned(
-        "chunked".into(),
-        LayoutVTableRef::new_ref(&ChunkedLayout),
-        dtype,
-        row_count,
-        vec![],
-        children,
-        None,
-    )
+        Ok(ChunkedLayout::new(
+            self.row_count,
+            self.dtype.clone(),
+            OwnedLayoutChildren::layout_children(children),
+        )
+        .into_layout())
+    }
 }

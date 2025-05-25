@@ -3,10 +3,9 @@ use std::future::Future;
 use futures_util::TryStreamExt;
 use vortex_error::VortexResult;
 
+use crate::ArrayRef;
 use crate::arrays::ChunkedArray;
-use crate::stream::take_rows::TakeRows;
-use crate::stream::{ArrayStream, ArrayStreamAdapter, SendableArrayStream};
-use crate::{Array, ArrayRef};
+use crate::stream::{ArrayStream, SendableArrayStream};
 
 pub trait ArrayStreamExt: ArrayStream {
     /// Box the [`ArrayStream`] so that it can be sent between threads.
@@ -33,17 +32,6 @@ pub trait ArrayStreamExt: ArrayStream {
                 Ok(ChunkedArray::try_new(chunks, dtype)?.to_array())
             }
         }
-    }
-
-    /// Perform a row-wise selection on the stream from an array of sorted indicessss.
-    fn take_rows(self, indices: ArrayRef) -> VortexResult<impl ArrayStream>
-    where
-        Self: Sized,
-    {
-        Ok(ArrayStreamAdapter::new(
-            self.dtype().clone(),
-            TakeRows::try_new(self, indices)?,
-        ))
     }
 }
 

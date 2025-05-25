@@ -7,10 +7,10 @@ use vortex_buffer::ByteBuffer;
 use vortex_dtype::datetime::arrow::make_temporal_ext_dtype;
 use vortex_dtype::datetime::{TemporalMetadata, TimeUnit, is_temporal_ext_type};
 use vortex_dtype::half::f16;
-use vortex_dtype::{DECIMAL128_MAX_PRECISION, DType, Nullability, PType};
+use vortex_dtype::{DECIMAL128_MAX_PRECISION, DType, DecimalDType, Nullability, PType};
 use vortex_error::{VortexError, vortex_bail};
 
-use crate::{DecimalValue, InnerScalarValue, PValue, Scalar};
+use crate::{DecimalValue, InnerScalarValue, PValue, Scalar, i256};
 
 impl TryFrom<Scalar> for ScalarValue {
     type Error = VortexError;
@@ -64,12 +64,16 @@ impl TryFrom<Scalar> for ScalarValue {
                     }
                 }
             }
-            DType::Utf8(_) => {
-                ScalarValue::Utf8(scalar.as_utf8().value().map(|s| s.as_str().to_string()))
-            }
-            DType::Binary(_) => {
-                ScalarValue::Binary(scalar.as_binary().value().map(|b| b.as_slice().to_vec()))
-            }
+            // SAFETY: By construction Utf8 scalar values are utf8
+            DType::Utf8(_) => ScalarValue::Utf8(scalar.as_utf8().value().map(|s| unsafe {
+                String::from_utf8_unchecked(Vec::<u8>::from(s.into_inner().into_inner()))
+            })),
+            DType::Binary(_) => ScalarValue::Binary(
+                scalar
+                    .as_binary()
+                    .value()
+                    .map(|b| Vec::<u8>::from(b.into_inner())),
+            ),
             DType::Struct(..) => {
                 todo!("struct scalar conversion")
             }
@@ -205,6 +209,32 @@ impl From<ScalarValue> for Scalar {
                     v.map(|i| crate::ScalarValue(InnerScalarValue::Primitive(PValue::I64(i))))
                         .unwrap_or_else(crate::ScalarValue::null),
                 )
+            }
+            ScalarValue::Decimal128(decimal, precision, scale) => {
+                let decimal_dtype = DecimalDType::new(precision, scale);
+                let nullable = Nullability::Nullable;
+                if let Some(value) = decimal {
+                    Scalar::decimal(
+                        DecimalValue::I128(value),
+                        decimal_dtype,
+                        Nullability::Nullable,
+                    )
+                } else {
+                    Scalar::null(DType::Decimal(decimal_dtype, nullable))
+                }
+            }
+            ScalarValue::Decimal256(decimal, precision, scale) => {
+                let decimal_dtype = DecimalDType::new(precision, scale);
+                let nullable = Nullability::Nullable;
+                if let Some(value) = decimal {
+                    Scalar::decimal(
+                        DecimalValue::I256(i256::from(value)),
+                        decimal_dtype,
+                        Nullability::Nullable,
+                    )
+                } else {
+                    Scalar::null(DType::Decimal(decimal_dtype, nullable))
+                }
             }
             _ => unimplemented!("Can't convert {value:?} value to a Vortex scalar"),
         }

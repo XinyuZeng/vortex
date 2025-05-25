@@ -3,16 +3,13 @@ use std::pin::Pin;
 pub use adapter::*;
 pub use ext::*;
 use futures_util::{Stream, stream};
-pub use take_rows::*;
 use vortex_dtype::DType;
 use vortex_error::VortexResult;
 
-use crate::iter::ArrayIteratorArrayExt;
 use crate::{Array, ArrayRef};
 
 mod adapter;
 mod ext;
-mod take_rows;
 
 /// A stream of array chunks along with a DType.
 ///
@@ -30,11 +27,9 @@ impl ArrayStream for SendableArrayStream {
     }
 }
 
-pub trait ArrayStreamArrayExt: Array {
+impl dyn Array + '_ {
     /// Create an [`ArrayStream`] over the array.
-    fn to_array_stream(&self) -> impl ArrayStream + 'static {
+    pub fn to_array_stream(&self) -> impl ArrayStream + 'static {
         ArrayStreamAdapter::new(self.dtype().clone(), stream::iter(self.to_array_iterator()))
     }
 }
-
-impl<A: ?Sized + Array> ArrayStreamArrayExt for A {}

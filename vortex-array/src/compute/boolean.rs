@@ -1,16 +1,15 @@
 use std::any::Any;
-use std::sync::{Arc, LazyLock};
+use std::sync::LazyLock;
 
-use arrow_array::ArrayRef as ArrowArrayRef;
+use arcref::ArcRef;
 use arrow_array::cast::AsArray;
 use arrow_schema::DataType;
 use vortex_dtype::DType;
 use vortex_error::{VortexError, VortexExpect, VortexResult, vortex_bail, vortex_err};
 
-use crate::arcref::ArcRef;
 use crate::arrow::{FromArrowArray, IntoArrowArray};
 use crate::compute::{ComputeFn, ComputeFnVTable, InvocationArgs, Kernel, Options, Output};
-use crate::encoding::Encoding;
+use crate::vtable::VTable;
 use crate::{Array, ArrayRef};
 
 /// Point-wise logical _and_ between two Boolean arrays.
@@ -52,7 +51,7 @@ pub fn boolean(lhs: &dyn Array, rhs: &dyn Array, op: BooleanOperator) -> VortexR
 pub struct BooleanKernelRef(ArcRef<dyn Kernel>);
 inventory::collect!(BooleanKernelRef);
 
-pub trait BooleanKernel: Encoding {
+pub trait BooleanKernel: VTable {
     fn boolean(
         &self,
         array: &Self::Array,
@@ -62,21 +61,21 @@ pub trait BooleanKernel: Encoding {
 }
 
 #[derive(Debug)]
-pub struct BooleanKernelAdapter<E: Encoding>(pub E);
+pub struct BooleanKernelAdapter<V: VTable>(pub V);
 
-impl<E: Encoding + BooleanKernel> BooleanKernelAdapter<E> {
+impl<V: VTable + BooleanKernel> BooleanKernelAdapter<V> {
     pub const fn lift(&'static self) -> BooleanKernelRef {
         BooleanKernelRef(ArcRef::new_ref(self))
     }
 }
 
-impl<E: Encoding + BooleanKernel> Kernel for BooleanKernelAdapter<E> {
+impl<V: VTable + BooleanKernel> Kernel for BooleanKernelAdapter<V> {
     fn invoke(&self, args: &InvocationArgs) -> VortexResult<Option<Output>> {
         let inputs = BooleanArgs::try_from(args)?;
-        let Some(array) = inputs.lhs.as_any().downcast_ref::<E::Array>() else {
+        let Some(array) = inputs.lhs.as_opt::<V>() else {
             return Ok(None);
         };
-        Ok(E::boolean(&self.0, array, inputs.rhs, inputs.operator)?.map(|array| array.into()))
+        Ok(V::boolean(&self.0, array, inputs.rhs, inputs.operator)?.map(|array| array.into()))
     }
 }
 
@@ -135,8 +134,8 @@ impl ComputeFnVTable for Boolean {
 
         log::debug!(
             "No boolean implementation found for LHS {}, RHS {}, and operator {:?} (or inverse)",
-            rhs.encoding(),
-            lhs.encoding(),
+            rhs.encoding_id(),
+            lhs.encoding_id(),
             operator,
         );
 
@@ -253,10 +252,7 @@ pub(crate) fn arrow_boolean(
         BooleanOperator::OrKleene => arrow_arith::boolean::or_kleene(&lhs, &rhs)?,
     };
 
-    Ok(ArrayRef::from_arrow(
-        Arc::new(array) as ArrowArrayRef,
-        nullable,
-    ))
+    Ok(ArrayRef::from_arrow(&array, nullable))
 }
 
 #[cfg(test)]
@@ -264,10 +260,9 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+    use crate::IntoArray;
     use crate::arrays::BoolArray;
     use crate::canonical::ToCanonical;
-    use crate::compute::scalar_at;
-
     #[rstest]
     #[case(BoolArray::from_iter([Some(true), Some(true), Some(false), Some(false)].into_iter())
     .into_array(), BoolArray::from_iter([Some(true), Some(false), Some(true), Some(false)].into_iter())
@@ -279,10 +274,10 @@ mod tests {
 
         let r = r.to_bool().unwrap().into_array();
 
-        let v0 = scalar_at(&r, 0).unwrap().as_bool().value();
-        let v1 = scalar_at(&r, 1).unwrap().as_bool().value();
-        let v2 = scalar_at(&r, 2).unwrap().as_bool().value();
-        let v3 = scalar_at(&r, 3).unwrap().as_bool().value();
+        let v0 = r.scalar_at(0).unwrap().as_bool().value();
+        let v1 = r.scalar_at(1).unwrap().as_bool().value();
+        let v2 = r.scalar_at(2).unwrap().as_bool().value();
+        let v3 = r.scalar_at(3).unwrap().as_bool().value();
 
         assert!(v0.unwrap());
         assert!(v1.unwrap());
@@ -299,10 +294,10 @@ mod tests {
     fn test_and(#[case] lhs: ArrayRef, #[case] rhs: ArrayRef) {
         let r = and(&lhs, &rhs).unwrap().to_bool().unwrap().into_array();
 
-        let v0 = scalar_at(&r, 0).unwrap().as_bool().value();
-        let v1 = scalar_at(&r, 1).unwrap().as_bool().value();
-        let v2 = scalar_at(&r, 2).unwrap().as_bool().value();
-        let v3 = scalar_at(&r, 3).unwrap().as_bool().value();
+        let v0 = r.scalar_at(0).unwrap().as_bool().value();
+        let v1 = r.scalar_at(1).unwrap().as_bool().value();
+        let v2 = r.scalar_at(2).unwrap().as_bool().value();
+        let v3 = r.scalar_at(3).unwrap().as_bool().value();
 
         assert!(v0.unwrap());
         assert!(!v1.unwrap());

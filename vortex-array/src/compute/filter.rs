@@ -1,20 +1,18 @@
 use std::ops::BitAnd;
 use std::sync::LazyLock;
 
+use arcref::ArcRef;
 use arrow_array::BooleanArray;
 use vortex_dtype::DType;
 use vortex_error::{VortexError, VortexExpect, VortexResult, vortex_bail, vortex_err};
 use vortex_mask::Mask;
 use vortex_scalar::Scalar;
 
-use crate::arcref::ArcRef;
 use crate::arrays::{BoolArray, ConstantArray};
 use crate::arrow::{FromArrowArray, IntoArrowArray};
-use crate::compute::{
-    ComputeFn, ComputeFnVTable, InvocationArgs, Kernel, Output, fill_null, scalar_at,
-};
-use crate::encoding::Encoding;
-use crate::{Array, ArrayRef, ArrayStatistics, Canonical, IntoArray, ToCanonical};
+use crate::compute::{ComputeFn, ComputeFnVTable, InvocationArgs, Kernel, Output, fill_null};
+use crate::vtable::VTable;
+use crate::{Array, ArrayRef, Canonical, IntoArray, ToCanonical};
 
 /// Keep only the elements for which the corresponding mask value is true.
 ///
@@ -23,7 +21,7 @@ use crate::{Array, ArrayRef, ArrayStatistics, Canonical, IntoArray, ToCanonical}
 /// ```
 /// use vortex_array::{Array, IntoArray};
 /// use vortex_array::arrays::{BoolArray, PrimitiveArray};
-/// use vortex_array::compute::{scalar_at, filter, mask};
+/// use vortex_array::compute::{ filter, mask};
 /// use vortex_mask::Mask;
 /// use vortex_scalar::Scalar;
 ///
@@ -34,10 +32,10 @@ use crate::{Array, ArrayRef, ArrayStatistics, Canonical, IntoArray, ToCanonical}
 /// )
 /// .unwrap();
 ///
-/// let filtered = filter(&array, &mask).unwrap();
+/// let filtered = filter(array.as_ref(), &mask).unwrap();
 /// assert_eq!(filtered.len(), 2);
-/// assert_eq!(scalar_at(&filtered, 0).unwrap(), Scalar::from(Some(0_i32)));
-/// assert_eq!(scalar_at(&filtered, 1).unwrap(), Scalar::from(Some(2_i32)));
+/// assert_eq!(filtered.scalar_at(0).unwrap(), Scalar::from(Some(0_i32)));
+/// assert_eq!(filtered.scalar_at(1).unwrap(), Scalar::from(Some(2_i32)));
 /// ```
 ///
 /// # Panics
@@ -84,15 +82,6 @@ impl ComputeFnVTable for Filter {
             return Ok(array.to_array().into());
         }
 
-        // Since we handle the AllTrue and AllFalse cases in the entry-point filter function,
-        // implementations can use `AllOr::expect_some` to unwrap the mixed values variant.
-        let values = match &mask {
-            Mask::AllTrue(_) => return Ok(array.to_array().into()),
-            Mask::AllFalse(_) => return Ok(Canonical::empty(array.dtype()).into_array().into()),
-            Mask::Values(values) => values,
-        };
-
-        // Check each kernel for the array
         for kernel in kernels {
             if let Some(output) = kernel.invoke(args)? {
                 return Ok(output);
@@ -103,21 +92,25 @@ impl ComputeFnVTable for Filter {
         }
 
         // Otherwise, we can use scalar_at if the mask has length 1.
-        if mask.true_count() == 1 && array.vtable().scalar_at_fn().is_some() {
+        if mask.true_count() == 1 {
             let idx = mask.first().vortex_expect("true_count == 1");
-            return Ok(ConstantArray::new(scalar_at(array, idx)?, 1)
+            return Ok(ConstantArray::new(array.scalar_at(idx)?, 1)
                 .into_array()
                 .into());
         }
 
         // Fallback: implement using Arrow kernels.
-        log::debug!("No filter implementation found for {}", array.encoding(),);
+        log::debug!("No filter implementation found for {}", array.encoding_id(),);
 
-        let array_ref = array.to_array().into_arrow_preferred()?;
-        let mask_array = BooleanArray::new(values.boolean_buffer().clone(), None);
-        let filtered = arrow_select::filter::filter(array_ref.as_ref(), &mask_array)?;
+        if !array.is_canonical() {
+            let canonical = array.to_canonical()?.into_array();
+            return filter(&canonical, mask).map(Into::into);
+        };
 
-        Ok(ArrayRef::from_arrow(filtered, array.dtype().is_nullable()).into())
+        vortex_bail!(
+            "No filter implementation found for array {}",
+            array.encoding()
+        )
     }
 
     fn return_dtype(&self, args: &InvocationArgs) -> VortexResult<DType> {
@@ -167,7 +160,7 @@ impl<'a> TryFrom<&InvocationArgs<'a>> for FilterArgs<'a> {
 pub struct FilterKernelRef(pub ArcRef<dyn Kernel>);
 inventory::collect!(FilterKernelRef);
 
-pub trait FilterKernel: Encoding {
+pub trait FilterKernel: VTable {
     /// Filter an array by the provided predicate.
     ///
     /// Note that the entry-point filter functions handles `Mask::AllTrue` and `Mask::AllFalse`,
@@ -177,21 +170,21 @@ pub trait FilterKernel: Encoding {
 
 /// Adapter to convert a [`FilterKernel`] into a [`Kernel`].
 #[derive(Debug)]
-pub struct FilterKernelAdapter<E: Encoding>(pub E);
+pub struct FilterKernelAdapter<V: VTable>(pub V);
 
-impl<E: Encoding + FilterKernel> FilterKernelAdapter<E> {
+impl<V: VTable + FilterKernel> FilterKernelAdapter<V> {
     pub const fn lift(&'static self) -> FilterKernelRef {
         FilterKernelRef(ArcRef::new_ref(self))
     }
 }
 
-impl<E: Encoding + FilterKernel> Kernel for FilterKernelAdapter<E> {
+impl<V: VTable + FilterKernel> Kernel for FilterKernelAdapter<V> {
     fn invoke(&self, args: &InvocationArgs) -> VortexResult<Option<Output>> {
         let inputs = FilterArgs::try_from(args)?;
-        let Some(array) = inputs.array.as_any().downcast_ref::<E::Array>() else {
+        let Some(array) = inputs.array.as_opt::<V>() else {
             return Ok(None);
         };
-        let filtered = E::filter(&self.0, array, inputs.mask)?;
+        let filtered = V::filter(&self.0, array, inputs.mask)?;
         Ok(Some(filtered.into()))
     }
 }
@@ -230,10 +223,26 @@ impl TryFrom<&dyn Array> for Mask {
         }
 
         // Convert nulls to false first in case this can be done cheaply by the encoding.
-        let array = fill_null(array, Scalar::bool(false, array.dtype().nullability()))?;
+        let array = fill_null(array, &Scalar::bool(false, array.dtype().nullability()))?;
 
         Self::try_from(&array.to_bool()?)
     }
+}
+
+pub fn arrow_filter_fn(array: &dyn Array, mask: &Mask) -> VortexResult<ArrayRef> {
+    let values = match &mask {
+        Mask::Values(values) => values,
+        _ => unreachable!("check in filter invoke"),
+    };
+
+    let array_ref = array.to_array().into_arrow_preferred()?;
+    let mask_array = BooleanArray::new(values.boolean_buffer().clone(), None);
+    let filtered = arrow_select::filter::filter(array_ref.as_ref(), &mask_array)?;
+
+    Ok(ArrayRef::from_arrow(
+        filtered.as_ref(),
+        array.dtype().is_nullable(),
+    ))
 }
 
 #[cfg(test)]

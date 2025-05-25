@@ -1,4 +1,3 @@
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
@@ -6,8 +5,8 @@ use std::time::Duration;
 use anyhow::Result;
 use xshell::Shell;
 
-use crate::ddb::DuckDBExecutor;
-use crate::{Format, IdempotentPath};
+use crate::Format;
+use crate::ddb::{DuckDBExecutor, vortex_duckdb_extension_path};
 
 pub enum TpcDataset {
     TpcH,
@@ -41,13 +40,13 @@ impl DuckdbTpcOptions {
     }
 }
 
-impl Default for DuckdbTpcOptions {
-    fn default() -> Self {
+impl DuckdbTpcOptions {
+    pub fn new(base_dir: PathBuf, dataset: TpcDataset, format: Format) -> Self {
         Self {
             scale_factor: 1,
-            base_dir: "tpch-duckdb".to_data_path(),
-            dataset: TpcDataset::TpcH,
-            format: Format::Csv,
+            base_dir,
+            dataset,
+            format,
             duckdb_path: None,
         }
     }
@@ -99,15 +98,23 @@ pub fn generate_tpc(opts: DuckdbTpcOptions) -> Result<PathBuf> {
 
     let mut command = Command::new(opts.duckdb_path.unwrap_or_else(|| PathBuf::from("duckdb")));
 
+    let vortex_path = vortex_duckdb_extension_path();
+    command
+        .arg("-unsigned")
+        .arg("-c")
+        .arg(format!("load \"{}\";", vortex_path.to_string_lossy()));
+
+    command
+        .arg("-c")
+        .arg("SET autoinstall_known_extensions=1;")
+        .arg("-c")
+        .arg("SET autoload_known_extensions=1;");
+
     match opts.dataset {
         TpcDataset::TpcH => command
             .arg("-c")
-            .arg("load tpch;")
-            .arg("-c")
             .arg(format!("call dbgen(sf={scale_factor})")),
         TpcDataset::TpcDs => command
-            .arg("-c")
-            .arg("load tpcds;")
             .arg("-c")
             .arg(format!("call dsdgen(sf={scale_factor})")),
     };
@@ -115,13 +122,13 @@ pub fn generate_tpc(opts: DuckdbTpcOptions) -> Result<PathBuf> {
     match opts.format {
         Format::Csv => {
             command.arg("-c").arg(format!(
-                "export database '{}' (format CSV, delimiter '|', header false);",
+                "EXPORT DATABASE '{}' (FORMAT CSV, delimiter '|', header false, FILE_EXTENSION tbl);",
                 output_dir.to_string_lossy(),
             ));
         }
         Format::Parquet => {
             command.arg("-c").arg(format!(
-                "export database '{}' (format PARQUET);",
+                "EXPORT DATABASE '{}' (format PARQUET);",
                 output_dir.to_string_lossy(),
             ));
         }
@@ -133,28 +140,20 @@ pub fn generate_tpc(opts: DuckdbTpcOptions) -> Result<PathBuf> {
             }
 
             command.arg("-c").arg(format!(
-                "export database '{}' (format VORTEX);",
+                "EXPORT DATABASE '{}' (format VORTEX);",
                 output_dir.to_string_lossy(),
             ));
         }
-        Format::OnDiskDuckDB => { /* Do nothing */ }
-        _ => todo!(),
+        Format::OnDiskDuckDB | Format::Arrow => { /* Do nothing */ }
     };
 
+    command.envs(std::env::vars_os());
     let output = command.output()?;
 
     if !output.status.success() || !output.stderr.is_empty() {
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("duckdb failed: stdout=\"{stdout}\", stderr=\"{stderr}\"");
-    }
-
-    if opts.format == Format::Csv {
-        // rename .csv files into the expected .tbl extension
-        sh.read_dir(&output_dir)?
-            .into_iter()
-            .filter(|p| p.extension().is_some_and(|ext| ext == "csv"))
-            .try_for_each(|p| fs::rename(p.clone(), p.with_extension("tbl")))?;
+        anyhow::bail!("duckdb failed, generating tpc*: stdout=\"{stdout}\", stderr=\"{stderr}\"");
     }
 
     // Write a success file to indicate this scale-factor is created.

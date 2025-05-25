@@ -1,15 +1,13 @@
 use std::collections::VecDeque;
 
-use vortex_array::arcref::ArcRef;
+use arcref::ArcRef;
 use vortex_array::arrays::ChunkedArray;
-use vortex_array::compute::slice;
-use vortex_array::nbytes::NBytes;
 use vortex_array::{Array, ArrayContext, ArrayRef, IntoArray};
 use vortex_dtype::DType;
 use vortex_error::{VortexExpect, VortexResult};
 
 use crate::segments::SegmentWriter;
-use crate::{Layout, LayoutStrategy, LayoutWriter, LayoutWriterExt};
+use crate::{LayoutRef, LayoutStrategy, LayoutWriter, LayoutWriterExt};
 
 pub struct RepartitionStrategy {
     pub options: RepartitionWriterOptions,
@@ -84,8 +82,8 @@ impl RepartitionWriter {
                 let len = chunk.len();
 
                 if len > remaining {
-                    let left = slice(&chunk, 0, remaining)?;
-                    let right = slice(&chunk, remaining, len)?;
+                    let left = chunk.slice(0, remaining)?;
+                    let right = chunk.slice(remaining, len)?;
                     self.row_count += right.len();
                     self.nbytes += right.nbytes();
                     self.chunks.push_front(right);
@@ -117,6 +115,13 @@ impl LayoutWriter for RepartitionWriter {
         segment_writer: &mut dyn SegmentWriter,
         chunk: ArrayRef,
     ) -> VortexResult<()> {
+        assert_eq!(
+            chunk.dtype(),
+            &self.dtype,
+            "Can't push chunks of the wrong dtype into a LayoutWriter. Pushed {} but expected {}.",
+            chunk.dtype(),
+            self.dtype
+        );
         // We make sure the chunks are canonical so our nbytes measurement is accurate.
         let chunk = chunk.to_canonical()?.into_array();
 
@@ -124,7 +129,7 @@ impl LayoutWriter for RepartitionWriter {
         let mut offset = 0;
         while offset < chunk.len() {
             let end = (offset + self.options.block_len_multiple).min(chunk.len());
-            let c = slice(&chunk, offset, end)?;
+            let c = chunk.slice(offset, end)?;
             self.row_count += c.len();
             self.nbytes += c.nbytes();
             self.chunks.push_back(c);
@@ -145,7 +150,7 @@ impl LayoutWriter for RepartitionWriter {
         self.writer.flush(segment_writer)
     }
 
-    fn finish(&mut self, segment_writer: &mut dyn SegmentWriter) -> VortexResult<Layout> {
+    fn finish(&mut self, segment_writer: &mut dyn SegmentWriter) -> VortexResult<LayoutRef> {
         self.writer.finish(segment_writer)
     }
 }

@@ -4,7 +4,7 @@ use vortex_buffer::BufferMut;
 use vortex_dtype::{DType, NativePType};
 use vortex_error::{VortexExpect as _, vortex_panic};
 
-use crate::Array;
+use crate::IntoArray;
 use crate::arrays::primitive::PrimitiveArray;
 use crate::arrays::varbin::VarBinArray;
 use crate::validity::Validity;
@@ -106,9 +106,7 @@ mod test {
     use vortex_dtype::Nullability::Nullable;
     use vortex_scalar::Scalar;
 
-    use crate::array::Array;
     use crate::arrays::varbin::builder::VarBinBuilder;
-    use crate::compute::scalar_at;
 
     #[test]
     fn test_builder() {
@@ -121,9 +119,9 @@ mod test {
         assert_eq!(array.len(), 3);
         assert_eq!(array.dtype().nullability(), Nullable);
         assert_eq!(
-            scalar_at(&array, 0).unwrap(),
+            array.scalar_at(0).unwrap(),
             Scalar::utf8("hello".to_string(), Nullable)
         );
-        assert!(scalar_at(&array, 1).unwrap().is_null());
+        assert!(array.scalar_at(1).unwrap().is_null());
     }
 }

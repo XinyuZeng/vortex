@@ -1,7 +1,7 @@
 use arrow_array::array::{
-    Array as ArrowArray, ArrayRef as ArrowArrayRef, ArrowPrimitiveType,
-    BooleanArray as ArrowBooleanArray, GenericByteArray, NullArray as ArrowNullArray,
-    OffsetSizeTrait, PrimitiveArray as ArrowPrimitiveArray, StructArray as ArrowStructArray,
+    Array as ArrowArray, ArrowPrimitiveType, BooleanArray as ArrowBooleanArray, GenericByteArray,
+    NullArray as ArrowNullArray, OffsetSizeTrait, PrimitiveArray as ArrowPrimitiveArray,
+    StructArray as ArrowStructArray,
 };
 use arrow_array::cast::{AsArray, as_null_array};
 use arrow_array::types::{
@@ -27,7 +27,7 @@ use crate::arrays::{
 };
 use crate::arrow::FromArrowArray;
 use crate::validity::Validity;
-use crate::{Array, ArrayRef, IntoArray};
+use crate::{ArrayRef, IntoArray};
 
 impl IntoArray for ArrowBuffer {
     fn into_array(self) -> ArrayRef {
@@ -159,16 +159,12 @@ where
     match T::DATA_TYPE {
         DataType::Timestamp(time_unit, tz) => {
             let tz = tz.map(|s| s.to_string());
-            TemporalArray::new_timestamp(arr.into_array(), time_unit.into(), tz).into()
+            TemporalArray::new_timestamp(arr, time_unit.into(), tz).into()
         }
-        DataType::Time32(time_unit) => {
-            TemporalArray::new_time(arr.into_array(), time_unit.into()).into()
-        }
-        DataType::Time64(time_unit) => {
-            TemporalArray::new_time(arr.into_array(), time_unit.into()).into()
-        }
-        DataType::Date32 => TemporalArray::new_date(arr.into_array(), TimeUnit::D).into(),
-        DataType::Date64 => TemporalArray::new_date(arr.into_array(), TimeUnit::Ms).into(),
+        DataType::Time32(time_unit) => TemporalArray::new_time(arr, time_unit.into()).into(),
+        DataType::Time64(time_unit) => TemporalArray::new_time(arr, time_unit.into()).into(),
+        DataType::Date32 => TemporalArray::new_date(arr, TimeUnit::D).into(),
+        DataType::Date64 => TemporalArray::new_date(arr, TimeUnit::Ms).into(),
         DataType::Duration(_) => unimplemented!(),
         DataType::Interval(_) => unimplemented!(),
         _ => vortex_panic!("Invalid temporal type: {}", T::DATA_TYPE),
@@ -237,7 +233,7 @@ impl FromArrowArray<&ArrowStructArray> for ArrayRef {
                 .columns()
                 .iter()
                 .zip(value.fields())
-                .map(|(c, field)| Self::from_arrow(c.clone(), field.is_nullable()))
+                .map(|(c, field)| Self::from_arrow(c.as_ref(), field.is_nullable()))
                 .collect(),
             value.len(),
             nulls(value.nulls(), nullable),
@@ -256,7 +252,7 @@ impl<O: OffsetSizeTrait + NativePType> FromArrowArray<&GenericListArray<O>> for 
             dt => vortex_panic!("Invalid data type for ListArray: {dt}"),
         };
         ListArray::try_new(
-            Self::from_arrow(value.values().clone(), elem_nullable),
+            Self::from_arrow(value.values().as_ref(), elem_nullable),
             // offsets are always non-nullable
             value.offsets().clone().into_array(),
             nulls(value.nulls(), nullable),
@@ -290,8 +286,8 @@ fn nulls(nulls: Option<&NullBuffer>, nullable: bool) -> Validity {
     }
 }
 
-impl FromArrowArray<ArrowArrayRef> for ArrayRef {
-    fn from_arrow(array: ArrowArrayRef, nullable: bool) -> Self {
+impl FromArrowArray<&dyn ArrowArray> for ArrayRef {
+    fn from_arrow(array: &dyn ArrowArray, nullable: bool) -> Self {
         match array.data_type() {
             DataType::Boolean => Self::from_arrow(array.as_boolean(), nullable),
             DataType::UInt8 => Self::from_arrow(array.as_primitive::<UInt8Type>(), nullable),
@@ -326,7 +322,7 @@ impl FromArrowArray<ArrowArrayRef> for ArrayRef {
             DataType::Struct(_) => Self::from_arrow(array.as_struct(), nullable),
             DataType::List(_) => Self::from_arrow(array.as_list::<i32>(), nullable),
             DataType::LargeList(_) => Self::from_arrow(array.as_list::<i64>(), nullable),
-            DataType::Null => Self::from_arrow(as_null_array(&array), nullable),
+            DataType::Null => Self::from_arrow(as_null_array(array), nullable),
             DataType::Timestamp(u, _) => match u {
                 ArrowTimeUnit::Second => {
                     Self::from_arrow(array.as_primitive::<TimestampSecondType>(), nullable)

@@ -472,7 +472,6 @@ mod test {
     use itertools::Itertools;
     use vortex_dtype::{DType, Nullability, PType};
 
-    use crate::Array;
     use crate::arrays::PrimitiveArray;
     use crate::stats::{IsConstant, Precision, Stat, StatsProvider, StatsProviderExt, StatsSet};
 
@@ -727,12 +726,13 @@ mod test {
             PrimitiveArray::from_option_iter([Some(1), None, Some(2), Some(42), Some(10000), None]);
         let all_stats = all::<Stat>()
             .filter(|s| !matches!(s, Stat::Sum))
+            .filter(|s| !matches!(s, Stat::NaNCount))
             .collect_vec();
         array.statistics().compute_all(&all_stats).unwrap();
 
         let stats = array.statistics().to_owned();
         for stat in &all_stats {
-            assert!(stats.get(*stat).is_some(), "Stat {} is missing", stat);
+            assert!(stats.get(*stat).is_some(), "Stat {stat} is missing");
         }
 
         let merged = stats.clone().merge_unordered(
@@ -743,8 +743,7 @@ mod test {
             assert_eq!(
                 merged.get(*stat).is_some(),
                 stat.is_commutative(),
-                "Stat {} remains after merge_unordered despite not being commutative, or was removed despite being commutative",
-                stat
+                "Stat {stat} remains after merge_unordered despite not being commutative, or was removed despite being commutative"
             )
         }
 

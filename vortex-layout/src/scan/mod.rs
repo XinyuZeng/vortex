@@ -1,5 +1,5 @@
 use std::iter;
-use std::ops::Range;
+use std::ops::{Deref, Range};
 use std::sync::Arc;
 
 use arrow_array::RecordBatch;
@@ -13,6 +13,7 @@ use itertools::Itertools;
 pub use selection::*;
 pub use split_by::*;
 use vortex_array::iter::{ArrayIterator, ArrayIteratorAdapter};
+use vortex_array::stats::StatsSet;
 use vortex_array::stream::{ArrayStream, ArrayStreamAdapter};
 use vortex_array::{ArrayRef, ToCanonical};
 use vortex_buffer::Buffer;
@@ -23,8 +24,8 @@ use vortex_expr::transform::simplify_typed::simplify_typed;
 use vortex_expr::{ExprRef, Identity};
 use vortex_metrics::VortexMetrics;
 
+use crate::LayoutReader;
 use crate::layouts::filter::FilterLayoutReader;
-use crate::{ExprEvaluator, LayoutReader};
 mod executor;
 pub mod row_mask;
 mod selection;
@@ -48,6 +49,8 @@ pub struct ScanBuilder<A> {
     /// The executor used to spawn each split task.
     executor: Option<Arc<dyn TaskExecutor>>,
     metrics: VortexMetrics,
+    /// Should we try to prune the file (using stats) on open.
+    file_stats: Option<Arc<[StatsSet]>>,
 }
 
 impl<A: 'static + Send> ScanBuilder<A> {
@@ -108,8 +111,18 @@ impl<A: 'static + Send> ScanBuilder<A> {
         self
     }
 
+    pub fn with_executor(mut self, executor: Arc<dyn TaskExecutor>) -> Self {
+        self.executor = Some(executor);
+        self
+    }
+
     pub fn with_metrics(mut self, metrics: VortexMetrics) -> Self {
         self.metrics = metrics;
+        self
+    }
+
+    pub fn with_prune_file_on_open(mut self, stats_set: Arc<[StatsSet]>) -> Self {
+        self.file_stats = Some(stats_set);
         self
     }
 
@@ -130,6 +143,7 @@ impl<A: 'static + Send> ScanBuilder<A> {
             map_fn: Arc::new(move |a| map_fn(old_map_fn(a)?)),
             executor: self.executor,
             metrics: self.metrics,
+            file_stats: self.file_stats,
         }
     }
 
@@ -164,7 +178,7 @@ impl<A: 'static + Send> ScanBuilder<A> {
             .cloned()
             .chain(projection_mask.iter().cloned())
             .collect();
-        let splits = self.split_by.splits(layout_reader.layout(), &field_mask)?;
+        let splits = self.split_by.splits(layout_reader.deref(), &field_mask)?;
 
         let row_masks = splits
             .into_iter()
@@ -236,7 +250,7 @@ impl<A: 'static + Send> ScanBuilder<A> {
             row_masks
         };
 
-        // Finally, map the row masks through the projection evaluation
+        // Finally, map the row masks through the projection evaluation and spawn.
         row_masks
             .into_iter()
             .map(|(row_range, mask_fut)| {
@@ -284,6 +298,7 @@ impl ScanBuilder<ArrayRef> {
             map_fn: Arc::new(Ok),
             executor: None,
             metrics: Default::default(),
+            file_stats: None,
         }
     }
 

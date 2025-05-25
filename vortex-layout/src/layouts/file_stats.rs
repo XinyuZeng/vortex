@@ -1,14 +1,14 @@
 use std::sync::Arc;
 
 use itertools::Itertools;
-use vortex_array::ArrayRef;
 use vortex_array::stats::{Stat, StatsSet};
+use vortex_array::{Array, ArrayRef, ToCanonical};
 use vortex_dtype::DType;
 use vortex_error::{VortexExpect, VortexResult};
 
-use crate::layouts::stats::stats_table::StatsAccumulator;
+use crate::layouts::zoned::zone_map::StatsAccumulator;
 use crate::segments::SegmentWriter;
-use crate::{Layout, LayoutWriter};
+use crate::{LayoutRef, LayoutWriter};
 
 /// A layout writer that computes aggregate statistics for all fields.
 ///
@@ -24,13 +24,21 @@ impl FileStatsLayoutWriter {
         inner: Box<dyn LayoutWriter>,
         dtype: &DType,
         stats: Arc<[Stat]>,
+        max_variable_length_statistics_size: usize,
     ) -> VortexResult<Self> {
         let stats_accumulators = match dtype.as_struct() {
             Some(dtype) => dtype
                 .fields()
-                .map(|field_dtype| StatsAccumulator::new(field_dtype, &stats))
+                .map(|field_dtype| {
+                    StatsAccumulator::new(&field_dtype, &stats, max_variable_length_statistics_size)
+                })
                 .collect(),
-            None => [StatsAccumulator::new(dtype.clone(), &stats)].into(),
+            None => [StatsAccumulator::new(
+                dtype,
+                &stats,
+                max_variable_length_statistics_size,
+            )]
+            .into(),
         };
 
         Ok(Self {
@@ -63,15 +71,13 @@ impl LayoutWriter for FileStatsLayoutWriter {
         segment_writer: &mut dyn SegmentWriter,
         chunk: ArrayRef,
     ) -> VortexResult<()> {
-        match chunk.as_struct_typed() {
-            None => {
-                self.stats_accumulators[0].push_chunk(&chunk)?;
+        if chunk.dtype().is_struct() {
+            let chunk = chunk.to_struct()?;
+            for (acc, field) in self.stats_accumulators.iter_mut().zip_eq(chunk.fields()) {
+                acc.push_chunk(field)?;
             }
-            Some(array) => {
-                for (acc, field) in self.stats_accumulators.iter_mut().zip_eq(array.fields()) {
-                    acc.push_chunk(&field)?;
-                }
-            }
+        } else {
+            self.stats_accumulators[0].push_chunk(&chunk)?;
         }
         self.inner.push_chunk(segment_writer, chunk)
     }
@@ -80,7 +86,7 @@ impl LayoutWriter for FileStatsLayoutWriter {
         self.inner.flush(segment_writer)
     }
 
-    fn finish(&mut self, segment_writer: &mut dyn SegmentWriter) -> VortexResult<Layout> {
+    fn finish(&mut self, segment_writer: &mut dyn SegmentWriter) -> VortexResult<LayoutRef> {
         self.inner.finish(segment_writer)
     }
 }

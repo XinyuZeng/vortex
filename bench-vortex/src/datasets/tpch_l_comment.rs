@@ -1,11 +1,12 @@
 use async_trait::async_trait;
-use vortex::arrays::ChunkedArray;
+use vortex::arrays::{ChunkedArray, ChunkedVTable};
 use vortex::dtype::FieldName;
-use vortex::{Array, ArrayExt, ArrayRef, ToCanonical};
+use vortex::{ArrayRef, IntoArray, ToCanonical};
 
 use crate::datasets::Dataset;
-use crate::tpch;
-use crate::tpch::dbgen::{DBGen, DBGenOptions};
+use crate::ddb::duckdb_executable_path;
+use crate::tpch::duckdb::{DuckdbTpcOptions, TpcDataset, generate_tpc};
+use crate::{Format, IdempotentPath, tpch};
 
 pub struct TPCHLCommentChunked;
 
@@ -16,16 +17,21 @@ impl Dataset for TPCHLCommentChunked {
     }
 
     async fn to_vortex_array(&self) -> ArrayRef {
-        let data_dir = DBGen::new(DBGenOptions::default()).generate().unwrap();
+        let duckdb_resolved_path = duckdb_executable_path(&None);
+        let opts = DuckdbTpcOptions::new("tpch".to_data_path(), TpcDataset::TpcH, Format::Csv)
+            .with_duckdb_path(duckdb_resolved_path.clone());
+        let data_dir = generate_tpc(opts).expect("gen tpch");
+
         let lineitem_vortex = tpch::load_table(data_dir, "lineitem", &tpch::schema::LINEITEM).await;
 
-        let lineitem_chunked = lineitem_vortex.as_::<ChunkedArray>();
+        let lineitem_chunked = lineitem_vortex.as_::<ChunkedVTable>();
         let comment_chunks = lineitem_chunked.chunks().iter().map(|chunk| {
             chunk
-                .as_struct_typed()
+                .to_struct()
                 .unwrap()
                 .project(&[FieldName::from("l_comment")])
                 .unwrap()
+                .into_array()
         });
         ChunkedArray::from_iter(comment_chunks).into_array()
     }

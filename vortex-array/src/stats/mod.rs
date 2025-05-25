@@ -5,7 +5,7 @@ use std::hash::Hash;
 
 use arrow_buffer::bit_iterator::BitIterator;
 use arrow_buffer::{BooleanBufferBuilder, MutableBuffer};
-use enum_iterator::{Sequence, last};
+use enum_iterator::{Sequence, all, last};
 use log::debug;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 pub use stats_set::*;
@@ -35,19 +35,6 @@ pub const PRUNING_STATS: &[Stat] = &[
     Stat::Sum,
     Stat::NullCount,
     Stat::NaNCount,
-];
-
-/// Stats to keep when serializing arrays to layouts
-pub const STATS_TO_WRITE: &[Stat] = &[
-    Stat::Min,
-    Stat::Max,
-    Stat::NullCount,
-    Stat::NaNCount,
-    Stat::Sum,
-    Stat::IsConstant,
-    Stat::IsSorted,
-    Stat::IsStrictSorted,
-    Stat::UncompressedSizeInBytes,
 ];
 
 #[derive(
@@ -174,6 +161,7 @@ impl Stat {
         matches!(self, Stat::Min | Stat::Max)
     }
 
+    /// Return the [`DType`] of the statistic scalar assuming the array is of the given [`DType`].
     pub fn dtype(&self, data_type: &DType) -> Option<DType> {
         Some(match self {
             Self::IsConstant => DType::Bool(NonNullable),
@@ -183,7 +171,13 @@ impl Stat {
             Self::Min => data_type.clone(),
             Self::NullCount => DType::Primitive(PType::U64, NonNullable),
             Self::UncompressedSizeInBytes => DType::Primitive(PType::U64, NonNullable),
-            Self::NaNCount => DType::Primitive(PType::U64, NonNullable),
+            Self::NaNCount => match data_type {
+                DType::Primitive(ptype, ..) if ptype.is_float() => {
+                    DType::Primitive(PType::U64, NonNullable)
+                }
+                // Any other type does not support NaN count
+                _ => return None,
+            },
             Self::Sum => {
                 // Any array that cannot be summed has a sum DType of null.
                 // Any array that can be summed, but overflows, has a sum _value_ of null.
@@ -228,6 +222,10 @@ impl Stat {
             Self::Sum => "sum",
             Self::NaNCount => "nan_count",
         }
+    }
+
+    pub fn all() -> impl Iterator<Item = Stat> {
+        all::<Self>()
     }
 }
 
@@ -274,7 +272,6 @@ impl Display for Stat {
 mod test {
     use enum_iterator::all;
 
-    use crate::array::Array;
     use crate::arrays::PrimitiveArray;
     use crate::stats::Stat;
 

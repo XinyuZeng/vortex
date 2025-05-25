@@ -4,8 +4,7 @@ use vortex_error::{VortexResult, vortex_panic};
 
 use crate::arrays::ConstantArray;
 use crate::arrow::{FromArrowArray, IntoArrowArray};
-use crate::compute::{scalar_at, slice};
-use crate::{Array, ArrayRef};
+use crate::{Array, ArrayRef, IntoArray};
 
 /// A wrapper around a generic Arrow array that can be used as a Datum in Arrow compute.
 #[derive(Debug)]
@@ -19,7 +18,7 @@ impl Datum {
     pub fn try_new(array: &dyn Array) -> VortexResult<Self> {
         if array.is_constant() {
             Ok(Self {
-                array: slice(array, 0, 1)?.into_arrow_preferred()?,
+                array: array.slice(0, 1)?.into_arrow_preferred()?,
                 is_scalar: true,
             })
         } else {
@@ -36,7 +35,7 @@ impl Datum {
     ) -> VortexResult<Self> {
         if array.is_constant() {
             Ok(Self {
-                array: slice(array, 0, 1)?.into_arrow(target_datatype)?,
+                array: array.slice(0, 1)?.into_arrow(target_datatype)?,
                 is_scalar: true,
             })
         } else {
@@ -73,9 +72,9 @@ where
             "Array length mismatch, expected {} got {} for encoding {}",
             len,
             array.len(),
-            array.encoding()
+            array.encoding_id()
         );
     }
 
-    Ok(ConstantArray::new(scalar_at(&array, 0)?, len).into_array())
+    Ok(ConstantArray::new(array.scalar_at(0)?, len).into_array())
 }

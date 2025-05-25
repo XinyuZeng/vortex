@@ -1,19 +1,20 @@
 use std::iter;
-use std::ops::{BitAnd, Range};
-use std::sync::{Arc, RwLock};
+use std::ops::{BitAnd, Deref, Range};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use bit_vec::BitVec;
+use dashmap::DashMap;
 use itertools::Itertools;
+use parking_lot::RwLock;
 use sketches_ddsketch::DDSketch;
-use vortex_array::aliases::hash_map::HashMap;
 use vortex_error::{VortexExpect, VortexResult, vortex_err, vortex_panic};
 use vortex_expr::ExprRef;
 use vortex_expr::forms::cnf::cnf;
 use vortex_mask::Mask;
 
 use crate::{
-    ArrayEvaluation, ExprEvaluator, Layout, LayoutReader, MaskEvaluation, PruningEvaluation,
+    ArrayEvaluation, Layout, LayoutReader, LayoutReaderRef, MaskEvaluation, PruningEvaluation,
 };
 
 /// The selectivity histogram quantile to use for reordering conjuncts. Where 0 == no rows match.
@@ -26,12 +27,12 @@ const DEFAULT_SELECTIVITY_QUANTILE: f64 = 0.1;
 /// This reader does not have a corresponding layout in the file, as it merely implements
 /// expression rewrite logic at read-time.
 pub struct FilterLayoutReader {
-    child: Arc<dyn LayoutReader>,
-    cache: RwLock<HashMap<ExprRef, Arc<FilterExpr>>>,
+    child: LayoutReaderRef,
+    cache: DashMap<ExprRef, Arc<FilterExpr>>,
 }
 
 impl FilterLayoutReader {
-    pub fn new(child: Arc<dyn LayoutReader>) -> Self {
+    pub fn new(child: LayoutReaderRef) -> Self {
         Self {
             child,
             cache: Default::default(),
@@ -39,17 +40,19 @@ impl FilterLayoutReader {
     }
 }
 
-impl LayoutReader for FilterLayoutReader {
-    fn layout(&self) -> &Layout {
-        self.child.layout()
-    }
+impl Deref for FilterLayoutReader {
+    type Target = dyn Layout;
 
-    fn children(&self) -> VortexResult<Vec<Arc<dyn LayoutReader>>> {
-        self.child.children()
+    fn deref(&self) -> &Self::Target {
+        self.child.deref()
     }
 }
 
-impl ExprEvaluator for FilterLayoutReader {
+impl LayoutReader for FilterLayoutReader {
+    fn name(&self) -> &Arc<str> {
+        self.child.name()
+    }
+
     fn pruning_evaluation(
         &self,
         row_range: &Range<u64>,
@@ -57,7 +60,6 @@ impl ExprEvaluator for FilterLayoutReader {
     ) -> VortexResult<Box<dyn PruningEvaluation>> {
         let filter_expr = self
             .cache
-            .write()?
             .entry(expr.clone())
             .or_insert_with(|| Arc::new(FilterExpr::new(expr.clone())))
             .clone();
@@ -80,7 +82,6 @@ impl ExprEvaluator for FilterLayoutReader {
     ) -> VortexResult<Box<dyn MaskEvaluation>> {
         let filter_expr = self
             .cache
-            .write()?
             .entry(expr.clone())
             .or_insert_with(|| Arc::new(FilterExpr::new(expr.clone())))
             .clone();
@@ -139,7 +140,7 @@ impl FilterExpr {
 
     /// Returns the next preferred conjunct to evaluate.
     fn next_conjunct(&self, remaining: &BitVec) -> Option<usize> {
-        let read = self.ordering.read().vortex_expect("poisoned lock");
+        let read = self.ordering.read();
         // Take the first remaining conjunct in the ordered list.
         read.iter().find(|&idx| remaining[*idx]).copied()
     }
@@ -155,9 +156,7 @@ impl FilterExpr {
         }
 
         {
-            let mut histogram = self.conjunct_selectivity[conjunct_idx]
-                .write()
-                .vortex_expect("poisoned lock");
+            let mut histogram = self.conjunct_selectivity[conjunct_idx].write();
 
             histogram.add(selectivity);
         }
@@ -168,7 +167,6 @@ impl FilterExpr {
             .map(|histogram| {
                 histogram
                     .read()
-                    .vortex_expect("poisoned lock")
                     .quantile(self.selectivity_quantile)
                     .map_err(|e| vortex_err!("{e}")) // Only errors when the quantile is out of range
                     .vortex_expect("quantile out of range")
@@ -178,14 +176,14 @@ impl FilterExpr {
             .collect::<Vec<_>>();
 
         {
-            let ordering = self.ordering.read().vortex_expect("lock poisoned");
+            let ordering = self.ordering.read();
             if ordering.is_sorted_by_key(|&idx| all_selectivity[idx]) {
                 return;
             }
         }
 
         // Re-sort our conjuncts based on the new statistics.
-        let mut ordering = self.ordering.write().vortex_expect("lock poisoned");
+        let mut ordering = self.ordering.write();
         ordering.sort_unstable_by(|&l_idx, &r_idx| {
             all_selectivity[l_idx]
                 .partial_cmp(&all_selectivity[r_idx])

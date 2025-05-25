@@ -95,9 +95,15 @@ typedef struct vx_dtype vx_dtype;
 typedef struct vx_array vx_array;
 
 /**
- * FFI-exposed stream interface.
+ * The FFI interface for an [`ArrayIterator`].
  */
-typedef struct vx_array_stream vx_array_stream;
+typedef struct vx_array_iterator vx_array_iterator;
+
+/**
+ * The `sink` interface is used to collect array chunks and place them into a resource
+ * (e.g. an array stream or file (`vx_array_sink_open_file`)).
+ */
+typedef struct vx_array_sink vx_array_sink;
 
 #if defined(ENABLE_DUCKDB_FFI)
 typedef struct vx_conversion_cache vx_conversion_cache;
@@ -112,6 +118,12 @@ typedef struct vx_error vx_error;
  * A file reader that can be used to read from a file.
  */
 typedef struct vx_file_reader vx_file_reader;
+
+/**
+ * An object that stores registries and caches.
+ * This should if possible be reused between queries in ann interactive session.
+ */
+typedef struct vx_session vx_session;
 
 /**
  * Options supplied for opening a file.
@@ -158,16 +170,43 @@ typedef struct vx_file_scan_options {
   /**
    * Number of columns in `projection`.
    */
-  int projection_len;
+  unsigned int projection_len;
+  /**
+   * Serialized expressions for pushdown
+   */
   const char *filter_expression;
-  int filter_expression_len;
+  /**
+   * The len in bytes of the filter expression
+   */
+  unsigned int filter_expression_len;
   /**
    * Splits the file into chunks of this size, if zero then we use the write layout.
    */
   int split_by_row_count;
+  /**
+   * First row of a range to scan.
+   */
+  unsigned long row_range_start;
+  /**
+   * Last row of a range to scan.
+   */
+  unsigned long row_range_end;
 } vx_file_scan_options;
 
 
+
+/**
+ * Attempt to advance the `current` pointer of the iterator.
+ *
+ * A return value of `true` indicates that another element was pulled from the iterator, and a return
+ * of `false` indicates that the iterator is finished.
+ *
+ * It is an error to call this function again after the iterator is finished.
+ */
+struct vx_array *vx_array_iter_next(struct vx_array_iterator *iter,
+                                    struct vx_error **error);
+
+void vx_array_iter_free(struct vx_array_iterator *array_iter);
 
 /**
  * Get the length of the array.
@@ -286,6 +325,17 @@ duckdb_logical_type vx_dtype_to_duckdb_logical_type(struct vx_dtype *dtype,
 
 #if defined(ENABLE_DUCKDB_FFI)
 /**
+ * Converts a DuckDB type into a vortex type
+ */
+struct vx_dtype *vx_duckdb_logical_type_to_dtype(const duckdb_logical_type *column_types,
+                                                 const unsigned char *column_nullable,
+                                                 const char *const *column_names,
+                                                 int column_count,
+                                                 struct vx_error **error);
+#endif
+
+#if defined(ENABLE_DUCKDB_FFI)
+/**
  * Back a single chunk of the array as a duckdb data chunk.
  * The initial call should pass offset = 0.
  * The offset is returned to the caller, which can be used to request the next chunk.
@@ -299,14 +349,12 @@ unsigned int vx_array_to_duckdb_chunk(struct vx_array *stream,
 #endif
 
 #if defined(ENABLE_DUCKDB_FFI)
-struct vx_array *vx_array_create_empty_from_duckdb_table(const duckdb_logical_type *type_array,
-                                                         const char *const *names,
-                                                         int len,
-                                                         struct vx_error **error);
-#endif
-
-#if defined(ENABLE_DUCKDB_FFI)
-struct vx_array *vx_array_append_duckdb_chunk(struct vx_array *array, duckdb_data_chunk chunk);
+/**
+ * Pushed a single duckdb chunk into a file sink.
+ */
+struct vx_array *vx_duckdb_chunk_to_array(duckdb_data_chunk chunk,
+                                          struct vx_dtype *dtype,
+                                          struct vx_error **error);
 #endif
 
 #if defined(ENABLE_DUCKDB_FFI)
@@ -334,6 +382,7 @@ void vx_error_free(struct vx_error *error);
  * Open a file at the given path on the file system.
  */
 struct vx_file_reader *vx_file_open_reader(const struct vx_file_open_options *options,
+                                           struct vx_session *session,
                                            struct vx_error **error);
 
 void vx_file_write_array(const char *path, struct vx_array *ffi_array, struct vx_error **error);
@@ -343,24 +392,26 @@ struct vx_file_statistics *vx_file_extract_statistics(struct vx_file_reader *fil
 void vx_file_statistics_free(struct vx_file_statistics *stat);
 
 /**
- * Get a readonly pointer to the DType of the data inside of the file.
- *
- * The pointer's lifetime is tied to the lifetime of the underlying file, so it should not be
- * dereferenced after the file has been freed.
+ * Get the DType of the data inside of the file.
  */
-const struct vx_dtype *vx_file_dtype(const struct vx_file_reader *file);
+struct vx_dtype *vx_file_dtype(const struct vx_file_reader *file);
 
 /**
- * Build a new `vx_array_stream` that return a series of `vx_array`s scan over a `vx_file`.
+ * Build a new `vx_array_iterator` that returns a series of `vx_array`s from a scan over a `vx_layout_reader`.
  */
-struct vx_array_stream *vx_file_scan(const struct vx_file_reader *file,
-                                     const struct vx_file_scan_options *opts,
-                                     struct vx_error **error);
+struct vx_array_iterator *vx_file_reader_scan(const struct vx_file_reader *file_reader,
+                                              const struct vx_file_scan_options *opts,
+                                              struct vx_error **error);
+
+/**
+ * Returns the row count for a given file reader.
+ */
+uint64_t vx_file_row_count(struct vx_file_reader *file_reader, struct vx_error **error);
 
 /**
  * Free the file and all associated resources.
  *
- * This function will not automatically free any :c:func:`vx_array_stream` that were built from
+ * This function will not automatically free any :c:func:`vx_array_iterator` that were built from
  * this file.
  */
 void vx_file_reader_free(struct vx_file_reader *file);
@@ -374,29 +425,35 @@ void vx_file_reader_free(struct vx_file_reader *file);
 void vx_init_logging(enum vx_log_level level);
 
 /**
- * Gets the dtype from an array `stream`, if the stream is finished the `DType` is null
+ * Create a session to be used for the lifetime of an interactive session.
  */
-const struct vx_dtype *vx_array_stream_dtype(const struct vx_array_stream *stream);
+struct vx_session *vx_session_create(void);
 
 /**
- * Attempt to advance the `current` pointer of the stream.
- *
- * A return value of `true` indicates that another element was pulled from the stream, and a return
- * of `false` indicates that the stream is finished.
- *
- * It is an error to call this function again after the stream is finished.
+ * Free a session
  */
-struct vx_array *vx_array_stream_next(struct vx_array_stream *stream, struct vx_error **error);
+void vx_session_free(struct vx_session *session);
 
 /**
- * Predicate function to check if the array stream is finished.
+ * Opens a writable array stream, where sink is used to push values into the stream.
+ * To close the stream close the sink with `vx_array_sink_close`.
  */
-bool vx_array_stream_finished(const struct vx_array_stream *stream);
+struct vx_array_sink *vx_array_sink_open_file(const char *path,
+                                              const struct vx_dtype *dtype,
+                                              struct vx_error **error);
 
 /**
- * Free the array stream and all associated resources.
+ * Pushed a single array chunk into a file sink.
  */
-void vx_array_stream_free(struct vx_array_stream *stream);
+void vx_array_sink_push(struct vx_array_sink *sink,
+                        const struct vx_array *array,
+                        struct vx_error **error);
+
+/**
+ * Closes an array sink, must be called to ensure all the values pushed to the sink are written
+ * to the external resource.
+ */
+void vx_array_sink_close(struct vx_array_sink *sink, struct vx_error **error);
 
 #ifdef __cplusplus
 }

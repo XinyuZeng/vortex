@@ -1,11 +1,11 @@
 use vortex_error::VortexResult;
 
-use crate::arrays::{ChunkedArray, ChunkedEncoding};
+use crate::arrays::{ChunkedArray, ChunkedVTable};
 use crate::builders::{ArrayBuilder, BoolBuilder};
-use crate::compute::{CompareKernel, CompareKernelAdapter, Operator, compare, slice};
+use crate::compute::{CompareKernel, CompareKernelAdapter, Operator, compare};
 use crate::{Array, ArrayRef, register_kernel};
 
-impl CompareKernel for ChunkedEncoding {
+impl CompareKernel for ChunkedVTable {
     fn compare(
         &self,
         lhs: &ChunkedArray,
@@ -21,7 +21,7 @@ impl CompareKernel for ChunkedEncoding {
         );
 
         for chunk in lhs.non_empty_chunks() {
-            let sliced = slice(rhs, idx, idx + chunk.len())?;
+            let sliced = rhs.slice(idx, idx + chunk.len())?;
             let cmp_result = compare(chunk, &sliced, operator)?;
 
             bool_builder.extend_from_array(&cmp_result)?;
@@ -32,11 +32,12 @@ impl CompareKernel for ChunkedEncoding {
     }
 }
 
-register_kernel!(CompareKernelAdapter(ChunkedEncoding).lift());
+register_kernel!(CompareKernelAdapter(ChunkedVTable).lift());
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::IntoArray;
     use crate::arrays::PrimitiveArray;
 
     #[test]
@@ -46,7 +47,7 @@ mod tests {
             ChunkedArray::try_new(vec![base.clone(), base.clone()], base.dtype().clone()).unwrap();
         let chunked_empty = ChunkedArray::try_new(vec![], base.dtype().clone()).unwrap();
 
-        let r = compare(&chunked, &chunked_empty, Operator::Eq).unwrap();
+        let r = compare(chunked.as_ref(), chunked_empty.as_ref(), Operator::Eq).unwrap();
 
         assert!(r.is_empty());
     }

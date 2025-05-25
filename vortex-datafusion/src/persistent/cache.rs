@@ -61,7 +61,7 @@ impl VortexFileCache {
         let file_cache = Cache::builder()
             .max_capacity(size_mb as u64 * (1 << 20))
             .eviction_listener(|k: Arc<FileKey>, _v: VortexFile, cause| {
-                log::trace!("Removed {:?} due to {:?}", k, cause);
+                log::trace!("Removed {k:?} due to {cause:?}");
             })
             .weigher(|_k, vxf| {
                 u32::try_from(estimate_layout_size(vxf.footer())).unwrap_or(u32::MAX)
@@ -71,7 +71,7 @@ impl VortexFileCache {
         let segment_cache = Cache::builder()
             .max_capacity(segment_size_mb as u64 * (1 << 20))
             .eviction_listener(|k: Arc<SegmentKey>, _v: ByteBuffer, cause| {
-                log::trace!("Removed {:?} due to {:?}", k, cause);
+                log::trace!("Removed {k:?} due to {cause:?}");
             })
             .weigher(|_k, v| u32::try_from(v.len()).unwrap_or(u32::MAX))
             .build_with_hasher(DefaultHashBuilder::default());
@@ -162,8 +162,8 @@ fn estimate_layout_size(footer: &Footer) -> usize {
 
     let root_layout = footer.layout();
     let layout_size = size_of::<DType>()
-        + root_layout.metadata().map(|b| b.len()).unwrap_or_default()
-        + root_layout.nsegments() * size_of::<SegmentId>();
+        + root_layout.metadata().len()
+        + root_layout.segment_ids().len() * size_of::<SegmentId>();
 
     segments_size + stats_size + layout_size
 }

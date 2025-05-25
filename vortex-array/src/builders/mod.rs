@@ -7,7 +7,6 @@
 //!
 //! ```
 //! use vortex_array::builders::{builder_with_capacity, ArrayBuilderExt};
-//! use vortex_array::compute::scalar_at;
 //! use vortex_dtype::{DType, Nullability};
 //!
 //! // Create a new builder for string data.
@@ -20,10 +19,10 @@
 //!
 //! let strings = builder.finish();
 //!
-//! assert_eq!(scalar_at(&strings, 0).unwrap(), "a".into());
-//! assert_eq!(scalar_at(&strings, 1).unwrap(), "b".into());
-//! assert_eq!(scalar_at(&strings, 2).unwrap(), "c".into());
-//! assert_eq!(scalar_at(&strings, 3).unwrap(), "d".into());
+//! assert_eq!(strings.scalar_at(0).unwrap(), "a".into());
+//! assert_eq!(strings.scalar_at(1).unwrap(), "b".into());
+//! assert_eq!(strings.scalar_at(2).unwrap(), "c".into());
+//! assert_eq!(strings.scalar_at(3).unwrap(), "d".into());
 //! ```
 
 mod bool;
@@ -44,18 +43,18 @@ pub use extension::*;
 pub use list::*;
 pub use null::*;
 pub use primitive::*;
+pub use struct_::*;
 pub use varbinview::*;
 use vortex_dtype::{DType, match_each_native_ptype};
 use vortex_error::{VortexResult, vortex_bail, vortex_err};
 use vortex_mask::Mask;
 use vortex_scalar::{
     BinaryScalar, BoolScalar, ExtScalar, ListScalar, PrimitiveScalar, Scalar, ScalarValue,
-    StructScalar, Utf8Scalar,
+    StructScalar, Utf8Scalar, match_each_decimal_value_type,
 };
 
 use crate::arrays::precision_to_storage_size;
-use crate::builders::struct_::StructBuilder;
-use crate::{Array, ArrayRef, match_each_decimal_value_type};
+use crate::{Array, ArrayRef};
 
 pub trait ArrayBuilder: Send {
     fn as_any(&self) -> &dyn Any;
@@ -114,7 +113,6 @@ pub trait ArrayBuilder: Send {
 ///
 /// ```
 /// use vortex_array::builders::{builder_with_capacity, ArrayBuilderExt};
-/// use vortex_array::compute::scalar_at;
 /// use vortex_dtype::{DType, Nullability};
 ///
 /// // Create a new builder for string data.
@@ -127,10 +125,10 @@ pub trait ArrayBuilder: Send {
 ///
 /// let strings = builder.finish();
 ///
-/// assert_eq!(scalar_at(&strings, 0).unwrap(), "a".into());
-/// assert_eq!(scalar_at(&strings, 1).unwrap(), "b".into());
-/// assert_eq!(scalar_at(&strings, 2).unwrap(), "c".into());
-/// assert_eq!(scalar_at(&strings, 3).unwrap(), "d".into());
+/// assert_eq!(strings.scalar_at(0).unwrap(), "a".into());
+/// assert_eq!(strings.scalar_at(1).unwrap(), "b".into());
+/// assert_eq!(strings.scalar_at(2).unwrap(), "c".into());
+/// assert_eq!(strings.scalar_at(3).unwrap(), "d".into());
 /// ```
 pub fn builder_with_capacity(dtype: &DType, capacity: usize) -> Box<dyn ArrayBuilder> {
     match dtype {

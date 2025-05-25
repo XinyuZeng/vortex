@@ -1,5 +1,3 @@
-extern crate core;
-
 use std::any::Any;
 use std::fmt::{Debug, Display};
 use std::sync::Arc;
@@ -14,6 +12,7 @@ mod field;
 pub mod forms;
 mod get_item;
 mod identity;
+mod is_null;
 mod like;
 mod literal;
 mod merge;
@@ -31,6 +30,7 @@ pub use between::*;
 pub use binary::*;
 pub use get_item::*;
 pub use identity::*;
+pub use is_null::*;
 pub use like::*;
 pub use literal::*;
 pub use merge::*;
