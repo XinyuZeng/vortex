@@ -2,8 +2,10 @@
 use std::collections::HashMap;
 use std::fs::File;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Instant;
 
+use arcref::ArcRef;
 use arrow::array::RecordBatchReader;
 use itertools::Itertools;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
@@ -11,20 +13,21 @@ use tokio::fs;
 use vortex::arrays::ChunkedArray;
 use vortex::dtype::arrow::FromArrowType;
 use vortex::dtype::DType;
-use vortex::{ArrayRef, IntoArray};
-use vortex_array::stream::ArrayStreamExt;
-use vortex_array::TryIntoArray;
-use vortex_error::VortexResult;
-use vortex_file::{VortexLayoutStrategy, VortexOpenOptions, VortexWriteOptions};
-use vortex_layout::layouts::chunked::writer::ChunkedLayoutStrategy;
-use vortex_layout::layouts::flat::writer::FlatLayoutStrategy;
-use vortex_layout::{LayoutStrategy as LayoutStrategyTrait, StructStrategy};
+use vortex::error::VortexResult;
+use vortex::file::scan::LocalExecutor;
+use vortex::file::{VortexLayoutStrategy, VortexOpenOptions, VortexWriteOptions};
+use vortex::layout::layouts::chunked::writer::ChunkedLayoutStrategy;
+use vortex::layout::layouts::flat::writer::FlatLayoutStrategy;
+use vortex::layout::layouts::struct_::writer::StructStrategy;
+use vortex::layout::LayoutStrategy as LayoutStrategyTrait;
+use vortex::stream::ArrayStreamExt;
+use vortex::{ArrayRef, IntoArray, TryIntoArray};
 
 /// Trait for defining different layout strategies with metadata
 trait LayoutTestStrategy: Send + Sync {
     fn name(&self) -> &'static str;
     fn description(&self) -> &'static str;
-    fn create_strategy(&self) -> Box<dyn LayoutStrategyTrait>;
+    fn create_strategy(&self) -> ArcRef<dyn LayoutStrategyTrait>;
 }
 
 /// Flat layout strategy - stores data in simple flat chunks
@@ -39,8 +42,8 @@ impl LayoutTestStrategy for FlatLayoutTestStrategy {
         "Flat layout with simple chunking, no compression or optimization"
     }
 
-    fn create_strategy(&self) -> Box<dyn LayoutStrategyTrait> {
-        Box::new(FlatLayoutStrategy::default())
+    fn create_strategy(&self) -> ArcRef<dyn LayoutStrategyTrait> {
+        ArcRef::new_arc(Arc::new(FlatLayoutStrategy::default()))
     }
 }
 
@@ -56,8 +59,8 @@ impl LayoutTestStrategy for ChunkedLayoutTestStrategy {
         "Chunked layout that organizes data into separate chunks"
     }
 
-    fn create_strategy(&self) -> Box<dyn LayoutStrategyTrait> {
-        Box::new(ChunkedLayoutStrategy::default())
+    fn create_strategy(&self) -> ArcRef<dyn LayoutStrategyTrait> {
+        ArcRef::new_arc(Arc::new(ChunkedLayoutStrategy::default()))
     }
 }
 
@@ -73,8 +76,10 @@ impl LayoutTestStrategy for StructLayoutTestStrategy {
         "Struct-preserving layout that maintains struct boundaries"
     }
 
-    fn create_strategy(&self) -> Box<dyn LayoutStrategyTrait> {
-        Box::new(StructStrategy)
+    fn create_strategy(&self) -> ArcRef<dyn LayoutStrategyTrait> {
+        ArcRef::new_arc(Arc::new(StructStrategy::new(ArcRef::new_arc(Arc::new(
+            FlatLayoutStrategy::default(),
+        )))))
     }
 }
 
@@ -90,8 +95,8 @@ impl LayoutTestStrategy for VortexLayoutTestStrategy {
         "Default Vortex layout strategy with compression and optimization"
     }
 
-    fn create_strategy(&self) -> Box<dyn LayoutStrategyTrait> {
-        Box::new(VortexLayoutStrategy::default())
+    fn create_strategy(&self) -> ArcRef<dyn LayoutStrategyTrait> {
+        VortexLayoutStrategy::with_executor(Arc::new(LocalExecutor))
     }
 }
 
@@ -352,35 +357,15 @@ impl LayoutTester {
     ) -> VortexResult<()> {
         let file = fs::File::create(output_path).await?;
 
-        // Convert Box<dyn LayoutStrategy> to a concrete type by dereferencing and re-boxing
-        // This is needed because VortexWriteOptions expects the strategy to implement LayoutStrategy directly
         match strategy.name() {
-            "flat" => {
+            "flat" | "chunked" | "struct" | "vortex_default" => {
                 VortexWriteOptions::default()
-                    .with_strategy(FlatLayoutStrategy::default())
-                    .write(file, data.to_array_stream())
-                    .await?;
-            }
-            "chunked" => {
-                VortexWriteOptions::default()
-                    .with_strategy(ChunkedLayoutStrategy::default())
-                    .write(file, data.to_array_stream())
-                    .await?;
-            }
-            "struct" => {
-                VortexWriteOptions::default()
-                    .with_strategy(StructStrategy)
-                    .write(file, data.to_array_stream())
-                    .await?;
-            }
-            "vortex_default" => {
-                VortexWriteOptions::default()
-                    .with_strategy(VortexLayoutStrategy::default())
+                    .with_strategy(strategy.create_strategy())
                     .write(file, data.to_array_stream())
                     .await?;
             }
             _ => {
-                return Err(vortex_error::vortex_err!(
+                return Err(vortex::error::vortex_err!(
                     "Unknown strategy: {}",
                     strategy.name()
                 ));

@@ -1,0 +1,24 @@
+[package]
+name = "layout_playground"
+authors.workspace = true
+categories.workspace = true
+edition.workspace = true
+homepage.workspace = true
+include.workspace = true
+keywords.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+arrow = { workspace = true }
+itertools = { workspace = true }
+parquet = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+vortex = { workspace = true, features = ["parquet", "tokio"] }
+arcref = "0.2.0"
+
+[lints]
+workspace = true
