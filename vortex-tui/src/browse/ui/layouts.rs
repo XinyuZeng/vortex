@@ -7,7 +7,7 @@ use ratatui::widgets::{
     Block, BorderType, Borders, Cell, List, Paragraph, Row, StatefulWidget, Table, Widget, Wrap,
 };
 use vortex::error::VortexExpect;
-use vortex::expr::Identity;
+use vortex::expr::root;
 use vortex::mask::Mask;
 use vortex::{Array, ArrayRef, ToCanonical};
 use vortex_layout::layouts::flat::FlatVTable;
@@ -92,16 +92,16 @@ fn render_array(app: &AppState, area: Rect, buf: &mut Buffer, is_stats_table: bo
         .cursor
         .layout()
         .new_reader(
-            &"".into(),
-            &app.vxf.segment_source(),
-            app.vxf.footer().ctx(),
+            "".into(),
+            app.vxf.segment_source(),
+            app.vxf.footer().ctx().clone(),
         )
         .vortex_expect("Failed to create reader");
 
     let array = TOKIO_RUNTIME
         .block_on(
             reader
-                .projection_evaluation(&(0..row_count), &Identity::new_expr())
+                .projection_evaluation(&(0..row_count), &root())
                 .vortex_expect("Failed to construct projection")
                 .invoke(Mask::new_true(
                     usize::try_from(row_count).vortex_expect("row_count overflowed usize"),
