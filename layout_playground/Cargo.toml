@@ -17,6 +17,7 @@ arrow = { workspace = true }
 itertools = { workspace = true }
 parquet = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
 vortex = { workspace = true, features = ["parquet", "tokio"] }
 arcref = "0.2.0"
 
