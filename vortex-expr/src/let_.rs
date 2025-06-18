@@ -10,7 +10,8 @@ use crate::{AnalysisExpr, ExprRef, Identifier, Scope, ScopeDType, VortexExpr};
 
 #[allow(clippy::derived_hash_with_manual_eq)]
 #[derive(Debug, Eq, Hash)]
-/// Let expressions are of the form `let var = bind in expr`
+/// Let expressions are of the form `let var = bind in expr`,
+/// see `Scope`.
 pub struct Let {
     var: Identifier,
     bind: ExprRef,
@@ -80,7 +81,7 @@ impl VortexExpr for Let {
 
     fn unchecked_evaluate(&self, scope: &Scope) -> VortexResult<ArrayRef> {
         let v = self.bind.unchecked_evaluate(scope)?;
-        let ctx_p = scope.copy_with_value(self.var.clone(), v);
+        let ctx_p = scope.copy_with_array(self.var.clone(), v);
         self.expr.unchecked_evaluate(&ctx_p)
     }
 
@@ -97,7 +98,7 @@ impl VortexExpr for Let {
 
     fn return_dtype(&self, scope: &ScopeDType) -> VortexResult<DType> {
         let v = self.bind.return_dtype(scope)?;
-        let ctx_p = scope.copy_with_value(self.var.clone(), v);
+        let ctx_p = scope.copy_with_dtype(self.var.clone(), v);
         self.expr.return_dtype(&ctx_p)
     }
 }
@@ -137,7 +138,7 @@ mod tests {
             let_(
                 "y".parse().unwrap(),
                 get_item_scope("a2"),
-                eq(var("x".parse().unwrap()), var("y".parse().unwrap())),
+                eq(var("x"), var("y")),
             ),
         );
         let res = expr.evaluate(&Scope::new(struct_arr)).unwrap();

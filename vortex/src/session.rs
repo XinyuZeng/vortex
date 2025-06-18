@@ -10,6 +10,7 @@ use vortex_fastlanes::{BitPackedEncoding, DeltaEncoding, FoREncoding};
 use vortex_fsst::FSSTEncoding;
 use vortex_layout::{LayoutRegistry, LayoutRegistryExt};
 use vortex_metrics::VortexMetrics;
+use vortex_pco::PcoEncoding;
 use vortex_runend::RunEndEncoding;
 use vortex_sequence::SequenceEncoding;
 use vortex_sparse::SparseEncoding;
@@ -41,11 +42,14 @@ impl Default for VortexSession {
             EncodingRef::new_ref(DictEncoding.as_ref()),
             EncodingRef::new_ref(FSSTEncoding.as_ref()),
             EncodingRef::new_ref(FoREncoding.as_ref()),
+            EncodingRef::new_ref(PcoEncoding.as_ref()),
             EncodingRef::new_ref(RunEndEncoding.as_ref()),
             EncodingRef::new_ref(SequenceEncoding.as_ref()),
             EncodingRef::new_ref(SparseEncoding.as_ref()),
             EncodingRef::new_ref(ZigZagEncoding.as_ref()),
         ]);
+        #[cfg(feature = "zstd")]
+        arrays.register(vortex_zstd::ZstdEncoding.as_ref().into());
 
         // Register the layout encodings that Vortex ships with.
         let layouts = LayoutRegistry::default();

@@ -7,13 +7,17 @@ use vortex_array::stats::Stat;
 use vortex_dtype::{DType, FieldPath};
 use vortex_error::{VortexResult, vortex_err};
 
-use crate::{AnalysisExpr, ExprRef, Identifier, Scope, ScopeDType, StatsCatalog, VortexExpr};
+use crate::{
+    AccessPath, AnalysisExpr, ExprRef, Identifier, Scope, ScopeDType, StatsCatalog, VortexExpr,
+};
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct Var {
     var: Identifier,
 }
 
+/// Used to extract values (Arrays from the Scope).
+/// see `Scope`.
 impl Var {
     pub fn new_expr(var: Identifier) -> ExprRef {
         Arc::new(Self { var })
@@ -29,7 +33,27 @@ pub(crate) mod proto {
     use vortex_error::{VortexResult, vortex_bail};
     use vortex_proto::expr::kind::{Kind, Var as ProtoVar};
 
-    use crate::{ExprDeserialize, ExprRef, ExprSerializable, Id, Var};
+    use crate::{ExprDeserialize, ExprRef, ExprSerializable, Id, Var, root};
+
+    // NOTE(aduffy): identity expression is deprecated for the moment, but it is still
+    // in the protobuf definition. We map it into the new Var(root()) expression.
+    pub(crate) struct IdentitySerde;
+
+    impl Id for IdentitySerde {
+        fn id(&self) -> &'static str {
+            "identity"
+        }
+    }
+
+    impl ExprDeserialize for IdentitySerde {
+        fn deserialize(&self, kind: &Kind, _children: Vec<ExprRef>) -> VortexResult<ExprRef> {
+            let Kind::Identity(..) = kind else {
+                vortex_bail!("wrong kind {:?}, wanted identity", kind)
+            };
+
+            Ok(root())
+        }
+    }
 
     pub(crate) struct VarSerde;
 
@@ -73,15 +97,15 @@ impl Display for Var {
 
 impl AnalysisExpr for Var {
     fn max(&self, catalog: &mut dyn StatsCatalog) -> Option<ExprRef> {
-        catalog.stats_ref(self.var(), &FieldPath::root(), Stat::Max)
+        catalog.stats_ref(&self.field_path()?, Stat::Max)
     }
 
     fn min(&self, catalog: &mut dyn StatsCatalog) -> Option<ExprRef> {
-        catalog.stats_ref(self.var(), &FieldPath::root(), Stat::Min)
+        catalog.stats_ref(&self.field_path()?, Stat::Min)
     }
 
-    fn field_path(&self) -> Option<(Identifier, FieldPath)> {
-        Some((self.var.clone(), FieldPath::root()))
+    fn field_path(&self) -> Option<AccessPath> {
+        Some(AccessPath::new(FieldPath::root(), self.var.clone()))
     }
 }
 
@@ -113,8 +137,8 @@ impl VortexExpr for Var {
     }
 }
 
-pub fn var(ident: Identifier) -> ExprRef {
-    Var::new_expr(ident)
+pub fn var(ident: impl Into<Identifier>) -> ExprRef {
+    Var::new_expr(ident.into())
 }
 
 /// Return a global pointer to the identity token.
@@ -146,7 +170,7 @@ mod tests {
         let a1 = PrimitiveArray::new(buffer![5, 4, 3, 2, 1, 0], Validity::AllValid).to_array();
         let a2 = PrimitiveArray::from_iter(1..=6).to_array();
 
-        let expr = eq(var(Identifier::Identity), var("row".parse().unwrap()));
+        let expr = eq(var(Identifier::Identity), var("row"));
         let res = expr
             .evaluate(&Scope::new(a1).with_array("row".parse().unwrap(), a2))
             .unwrap();

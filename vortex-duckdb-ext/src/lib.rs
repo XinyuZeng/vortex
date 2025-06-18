@@ -4,7 +4,7 @@ use std::ffi::{CStr, c_char};
 use vortex::error::{VortexExpect, VortexResult};
 
 use crate::duckdb::{Connection, Database};
-use crate::scan::HelloTableFunction;
+use crate::scan::VortexTableFunction;
 
 mod convert;
 pub mod duckdb;
@@ -24,9 +24,9 @@ mod scan;
 /// cbindgen:ignore
 mod cpp;
 
-/// Initialize the Vortex extension by registering the `hello` function.
+/// Initialize the Vortex extension by registering the `vortex_scan` function.
 pub fn init(conn: &Connection) -> VortexResult<()> {
-    conn.register_table_function::<HelloTableFunction>(c"hello")
+    conn.register_table_function::<VortexTableFunction>(c"vortex_scan")
 }
 
 /// The DuckDB extension ABI initialization function.
@@ -54,27 +54,4 @@ pub extern "C" fn vortex_extension_version() -> *const c_char {
         CStr::from_bytes_with_nul_unchecked(concat!(env!("CARGO_PKG_VERSION"), "\0").as_bytes())
     }
     .as_ptr()
-}
-
-#[cfg(test)]
-mod tests {
-    use duckdb::Connection;
-
-    use crate::duckdb::Database;
-
-    #[test]
-    fn test_extension() {
-        let db = Database::open_in_memory().unwrap();
-        let connection = db.connect().unwrap();
-        super::init(&connection).unwrap();
-
-        // Now we use DuckDB-rs to query the connection.
-        let conn = unsafe { Connection::open_from_raw(db.as_ptr().cast()) }.unwrap();
-        let result = conn
-            .prepare("SELECT * FROM hello(?) WHERE greeting = 'Hello Bob'")
-            .unwrap()
-            .query_row(["Bob"], |row| row.get::<_, String>(0))
-            .unwrap();
-        assert_eq!(&result, "Hello Bob");
-    }
 }

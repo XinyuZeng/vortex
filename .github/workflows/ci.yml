@@ -179,7 +179,7 @@ jobs:
             target: wasm32-unknown-unknown
             env:
               rustflags: 'RUSTFLAGS="-A warnings --cfg getrandom_backend=\"wasm_js\""'
-            args: "--target wasm32-unknown-unknown --exclude vortex --exclude vortex-datafusion --exclude vortex-duckdb-ext --exclude vortex-tui"
+            args: "--target wasm32-unknown-unknown --exclude vortex --exclude vortex-datafusion --exclude vortex-duckdb-ext --exclude vortex-tui --exclude vortex-zstd"
     steps:
       - uses: runs-on/action@v1
       - uses: actions/checkout@v4
@@ -329,6 +329,7 @@ jobs:
       - name: Install nextest
         uses: taiki-e/install-action@nextest
       - name: Rust Tests
+        # vortex-duckdb-ext currently fails linking for cargo test targets.
         run: |
           cargo nextest run --locked --workspace --all-features --no-fail-fast
 
@@ -358,8 +359,14 @@ jobs:
           submodules: "recursive"
       - uses: ./.github/actions/cleanup
       - uses: ./.github/actions/setup-rust
-      # TODO(ngates): we should run tests here when they pass!
-      - run: ./gradlew shadowJar
+      # Build vortex-jni shared library, and copy into JAR.
+      - name: Build vortex-jni
+        run: |
+          cargo build -p vortex-jni
+          mkdir -p java/vortex-jni/src/main/resources/native/linux-amd64
+          cargo xtask java-test-files
+          cp target/debug/libvortex_jni.so java/vortex-jni/src/main/resources/native/linux-amd64
+      - run: ./gradlew test
         working-directory: ./java
 
   bench-codspeed:
@@ -389,9 +396,10 @@ jobs:
           cargo codspeed build --features test-harness \
             --exclude bench-vortex \
             --exclude vortex-datafusion \
-            --exclude vortex-tui \
+            --exclude vortex-duckdb-ext \
             --exclude vortex-fuzz \
             --exclude vortex-python \
+            --exclude vortex-tui \
             --exclude xtask \
             --workspace \
             --profile bench
@@ -456,7 +464,7 @@ jobs:
         with:
           tool: nextest
       - name: Run all tests with Miri
-        run: cargo miri nextest run --no-fail-fast --workspace --exclude vortex-file --exclude vortex-layout --exclude vortex-sampling-compressor --exclude vortex-fsst --exclude vortex-array --exclude vortex-dtype --exclude vortex-expr --exclude vortex-scalar --exclude vortex-duckdb
+        run: cargo miri nextest run --no-fail-fast --workspace --exclude vortex-file --exclude vortex-layout --exclude vortex-sampling-compressor --exclude vortex-fsst --exclude vortex-array --exclude vortex-dtype --exclude vortex-expr --exclude vortex-scalar --exclude vortex-duckdb --exclude vortex-duckdb-ext
         # For now, we only run Miri against known "fiddly" crates.
         if: false
       - name: Run Miri

@@ -13,13 +13,13 @@ use object_store::{ClientOptions, ObjectStore, ObjectStoreScheme};
 use parking_lot::Mutex;
 use prost::Message;
 use url::Url;
-use vortex::aliases::hash_map::HashMap;
 use vortex::buffer::Buffer;
 use vortex::dtype::DType;
 use vortex::error::{VortexError, VortexExpect, VortexResult, vortex_bail, vortex_err};
 use vortex::expr::{deserialize_expr, root, select};
 use vortex::file::{VortexFile, VortexOpenOptions};
 use vortex::proto::expr::Expr;
+use vortex::utils::aliases::hash_map::HashMap;
 
 use crate::array_iter::NativeArrayIterator;
 use crate::block_on;
@@ -115,12 +115,27 @@ pub extern "system" fn Java_dev_vortex_jni_NativeFileMethods_dtype(
 }
 
 #[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_vortex_jni_NativeFileMethods_rowCount(
+    mut env: JNIEnv,
+    _class: JClass,
+    pointer: jlong,
+) -> jlong {
+    let file = unsafe { NativeFile::from_ptr(pointer) };
+    try_or_throw(&mut env, |_| {
+        let row_count = jlong::try_from(file.inner.row_count())
+            .map_err(|_| vortex_err!("Overflow converting row count to jlong"))?;
+        Ok(row_count)
+    })
+}
+
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_vortex_jni_NativeFileMethods_scan(
     mut env: JNIEnv,
     _class: JClass,
     pointer: jlong,
     project_cols: JObject,
     predicate: JByteArray,
+    row_range: JLongArray,
     row_indices: JLongArray,
 ) -> jlong {
     // Return a new pointer to some native memory for the scan.
@@ -164,6 +179,15 @@ pub extern "system" fn Java_dev_vortex_jni_NativeFileMethods_scan(
                 .collect::<Result<Buffer<u64>, _>>()
                 .map_err(|_| vortex_err!("row indices can not be negative"))?;
             scan_builder = scan_builder.with_row_indices(indices_buffer);
+        }
+
+        if !row_range.is_null() {
+            let indices = unsafe { env.get_array_elements(&row_range, ReleaseMode::NoCopyBack) }?;
+            let start_idx =
+                u64::try_from(indices[0]).map_err(|_| vortex_err!("i64 row_index overflow"))?;
+            let end_idx =
+                u64::try_from(indices[1]).map_err(|_| vortex_err!("i64 row_index overflow"))?;
+            scan_builder = scan_builder.with_row_range(start_idx..end_idx);
         }
 
         Ok(NativeArrayIterator::new(Box::new(scan_builder.into_array_iter()?)).into_raw())

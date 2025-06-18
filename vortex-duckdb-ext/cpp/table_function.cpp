@@ -24,6 +24,18 @@ struct CTableBindData final : TableFunctionData {
 	    : info(std::move(info_p)), ffi_data(ffi_data_p) {
 	}
 
+	unique_ptr<FunctionData> Copy() const override {
+		assert(info->vtab.bind_data_clone != nullptr);
+
+		duckdb_vx_error error_out = nullptr;
+		const auto copied_ffi_data = info->vtab.bind_data_clone(ffi_data->DataPtr(), &error_out);
+		if (error_out) {
+			throw BinderException(IntoErrString(error_out));
+		}
+		return make_uniq<CTableBindData>(make_uniq<CTableFunctionInfo>(info->vtab),
+		                                 optional_ptr(reinterpret_cast<vortex::CData *>(copied_ffi_data)));
+	}
+
 	unique_ptr<CTableFunctionInfo> info;
 	optional_ptr<vortex::CData> ffi_data;
 };
@@ -33,6 +45,11 @@ struct CTableGlobalData final : GlobalTableFunctionState {
 	}
 
 	optional_ptr<vortex::CData> ffi_data;
+
+	idx_t MaxThreads() const override {
+		return 1;
+		// return GlobalTableFunctionState::MAX_THREADS;
+	}
 };
 
 struct CTableLocalData final : LocalTableFunctionState {
@@ -207,7 +224,6 @@ extern "C" duckdb_state duckdb_vx_tfunc_register(duckdb_connection ffi_conn,
 	}
 
 	auto conn = reinterpret_cast<Connection *>(ffi_conn);
-
 	auto tf = new TableFunction(vtab->name, {}, c_function, c_bind, c_init_global, c_init_local);
 
 	tf->pushdown_complex_filter = c_pushdown_complex_filter;

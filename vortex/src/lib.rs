@@ -10,15 +10,18 @@ pub use {
     vortex_btrblocks as compressor, vortex_buffer as buffer, vortex_dtype as dtype,
     vortex_error as error, vortex_expr as expr, vortex_flatbuffers as flatbuffers,
     vortex_ipc as ipc, vortex_layout as layout, vortex_mask as mask, vortex_metrics as metrics,
-    vortex_proto as proto, vortex_scalar as scalar,
+    vortex_proto as proto, vortex_scalar as scalar, vortex_utils as utils,
 };
 
 pub mod encodings {
+    #[cfg(feature = "zstd")]
+    pub use vortex_zstd as zstd;
     pub use {
         vortex_alp as alp, vortex_bytebool as bytebool, vortex_datetime_parts as datetime_parts,
         vortex_decimal_byte_parts as decimal_byte_parts, vortex_dict as dict,
-        vortex_fastlanes as fastlanes, vortex_fsst as fsst, vortex_runend as runend,
-        vortex_sequence as sequence, vortex_sparse as sparse, vortex_zigzag as zigzag,
+        vortex_fastlanes as fastlanes, vortex_fsst as fsst, vortex_pco as pco,
+        vortex_runend as runend, vortex_sequence as sequence, vortex_sparse as sparse,
+        vortex_zigzag as zigzag,
     };
 }
 

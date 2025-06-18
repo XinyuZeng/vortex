@@ -3,9 +3,9 @@ use std::hash::{BuildHasher, Hash, Hasher};
 use std::sync::LazyLock;
 
 use itertools::Itertools;
-use vortex_array::aliases::hash_map::{DefaultHashBuilder, HashMap};
 use vortex_dtype::{DType, FieldName, FieldNames, Nullability, StructFields};
 use vortex_error::{VortexExpect, VortexResult, vortex_bail};
+use vortex_utils::aliases::hash_map::{DefaultHashBuilder, HashMap};
 
 use crate::transform::immediate_access::{FieldAccesses, immediate_scope_accesses};
 use crate::transform::simplify_typed::simplify_typed;
@@ -118,7 +118,6 @@ impl<'a> StructFieldExpressionSplitter<'a> {
         let mut partition_names = Vec::with_capacity(splitter.sub_expressions.len());
         let mut partition_dtypes = Vec::with_capacity(splitter.sub_expressions.len());
         for (name, exprs) in splitter.sub_expressions.into_iter() {
-            let field_dtype = scope_dtype.field(&name)?;
             // If there is a single expr then we don't need to `pack` this, and we must update
             // the root expr removing this access.
             let expr = if exprs.len() == 1 {
@@ -134,6 +133,7 @@ impl<'a> StructFieldExpressionSplitter<'a> {
                 )
             };
 
+            let field_dtype = scope_dtype.field(&name)?;
             let field_ctx = ScopeDType::new(field_dtype);
             let expr = simplify_typed(expr.clone(), &field_ctx)?;
             let expr_dtype = expr.return_dtype(&field_ctx)?;
@@ -184,8 +184,6 @@ impl FolderMut for StructFieldExpressionSplitter<'_> {
                 .next()
                 .vortex_expect("expected one field");
 
-            // TODO(joe): dedup the sub_expression, if there are two expressions that are the same
-            // only create one entry here and reuse it.
             let sub_exprs = self.sub_expressions.entry(field_name.clone()).or_default();
             let idx = sub_exprs.len();
 
@@ -266,7 +264,13 @@ impl MutNodeVisitor for ScopeStepIntoFieldExpr {
     }
 }
 
-struct ReplaceAccessesWithChild(Vec<FieldName>);
+pub(crate) struct ReplaceAccessesWithChild(Vec<FieldName>);
+
+impl ReplaceAccessesWithChild {
+    pub(crate) fn new(field_names: Vec<FieldName>) -> Self {
+        Self(field_names)
+    }
+}
 
 impl MutNodeVisitor for ReplaceAccessesWithChild {
     type NodeTy = ExprRef;

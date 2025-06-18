@@ -1,12 +1,11 @@
 use vortex_array::stats::Stat;
-use vortex_dtype::FieldPath;
 
-use crate::{ExprRef, Identifier};
+use crate::{AccessPath, ExprRef};
 
 pub trait StatsCatalog {
-    // Given an id, field and stat return an expression that when evaluated will return that stat
-    // this would be a column reference or a literal value, if the value is known at planning time.
-    fn stats_ref(&mut self, _id: &Identifier, _field: &FieldPath, _stat: Stat) -> Option<ExprRef> {
+    /// Given an id, field and stat return an expression that when evaluated will return that stat
+    /// this would be a column reference or a literal value, if the value is known at planning time.
+    fn stats_ref(&mut self, _access_path: &AccessPath, _stat: Stat) -> Option<ExprRef> {
         None
     }
 }
@@ -14,8 +13,12 @@ pub trait StatsCatalog {
 /// This can be used by expression to plug into vortex expression analysis, such as
 /// pruning or expression simplification
 pub trait AnalysisExpr {
-    /// Tries to find an expression over zone-statistics which is true if-and-only-if `expr` is
-    /// false for all records in the zone.
+    /// An expression over zone-statistics which implies all records in the zone evaluate to false.
+    ///
+    /// Given an expression, `e`, if `e.stat_falsification(..)` evaluates to true, it is guaranteed
+    /// that `e` evaluates to false on all records in the zone. However, the inverse is not
+    /// necessarily true: even if the falsification evaluates to false, `e` need not evaluate to
+    /// true on all records.
     ///
     /// The `StatsCatalog` can be used to constrain or rename stats used in the final expr.
     ///
@@ -45,7 +48,7 @@ pub trait AnalysisExpr {
         None
     }
 
-    fn field_path(&self) -> Option<(Identifier, FieldPath)> {
+    fn field_path(&self) -> Option<AccessPath> {
         None
     }
 
