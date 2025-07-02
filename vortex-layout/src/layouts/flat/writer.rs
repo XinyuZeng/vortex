@@ -106,7 +106,10 @@ impl LayoutStrategy for FlatLayoutStrategy {
                 }
                 _ => {}
             }
-
+            if chunk.len() == 2 {
+                println!("Chunk dtype: {:?}", chunk.dtype());
+                println!("Chunk nbytes: {:?}", chunk.nbytes());
+            }
             // TODO(os): spawn serialization
             let buffers = chunk.serialize(
                 &ctx,

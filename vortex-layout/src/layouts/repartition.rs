@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 
 use arcref::ArcRef;
 use async_stream::try_stream;
-use futures::{StreamExt as _, pin_mut};
+use futures::{pin_mut, StreamExt as _};
 use vortex_array::arrays::ChunkedArray;
 use vortex_array::{Array, ArrayContext, ArrayRef, IntoArray};
 use vortex_error::{VortexExpect, VortexResult};
@@ -68,6 +68,12 @@ impl LayoutStrategy for RepartitionStrategy {
                 while offset < chunk.len() {
                     let end = (offset + options.block_len_multiple).min(chunk.len());
                     let sliced = chunk.slice(offset, end)?;
+                    if options.block_len_multiple == 2 {
+                        println!("before sliced dtype: {:?}", chunk.dtype());
+                        println!("before sliced nbytes: {:?}", chunk.nbytes());
+                        println!("Sliced dtype: {:?}", sliced.dtype());
+                        println!("Sliced nbytes: {:?}", sliced.nbytes());
+                    }
                     chunks.push_back(sliced);
                     offset = end;
 
@@ -76,6 +82,11 @@ impl LayoutStrategy for RepartitionStrategy {
                         assert!(!output_chunks.is_empty());
                         let chunked =
                             ChunkedArray::new_unchecked(output_chunks, dtype_clone.clone());
+                        if chunked.len() == 2 {
+                            let total_bytes = chunked.nbytes();
+                            println!("Chunked array total bytes: {}", total_bytes);
+                            println!("Chunked array dtype: {:?}", chunked.dtype());
+                        }
                         if !chunked.is_empty() {
                             yield (
                                 sequence_pointer.advance(),

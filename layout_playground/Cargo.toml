@@ -20,6 +20,7 @@ tokio = { workspace = true, features = ["full"] }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 vortex = { workspace = true, features = ["parquet", "tokio"] }
 arcref = "0.2.0"
+futures = { workspace = true }
 
 [lints]
 workspace = true

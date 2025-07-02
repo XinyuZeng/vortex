@@ -3,16 +3,16 @@ use arrow_array::array::{
     NullArray as ArrowNullArray, OffsetSizeTrait, PrimitiveArray as ArrowPrimitiveArray,
     StructArray as ArrowStructArray,
 };
-use arrow_array::cast::{AsArray, as_null_array};
+use arrow_array::cast::{as_null_array, AsArray};
 use arrow_array::types::{
     ByteArrayType, ByteViewType, Date32Type, Date64Type, Decimal128Type, Decimal256Type,
-    Float16Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type,
+    Float16Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type,
     Time32MillisecondType, Time32SecondType, Time64MicrosecondType, Time64NanosecondType,
     TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
-    TimestampSecondType, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
+    TimestampSecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
 };
 use arrow_array::{
-    BinaryViewArray, GenericByteViewArray, GenericListArray, StringViewArray, make_array,
+    make_array, BinaryViewArray, GenericByteViewArray, GenericListArray, StringViewArray,
 };
 use arrow_buffer::buffer::{NullBuffer, OffsetBuffer};
 use arrow_buffer::{ArrowNativeType, BooleanBuffer, Buffer as ArrowBuffer, ScalarBuffer};
@@ -21,7 +21,7 @@ use itertools::Itertools;
 use vortex_buffer::{Alignment, Buffer, ByteBuffer};
 use vortex_dtype::datetime::TimeUnit;
 use vortex_dtype::{DType, DecimalDType, NativePType, PType};
-use vortex_error::{VortexExpect as _, vortex_panic};
+use vortex_error::{vortex_panic, VortexExpect as _};
 use vortex_scalar::i256;
 
 use crate::arrays::{
@@ -436,8 +436,8 @@ mod tests {
     use arrow_array::new_null_array;
     use arrow_schema::{DataType, Field, Fields};
 
-    use crate::ArrayRef;
     use crate::arrow::FromArrowArray as _;
+    use crate::ArrayRef;
 
     #[test]
     pub fn nullable_may_contain_non_nullable() {

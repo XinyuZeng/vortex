@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::task::{Context, Poll, ready};
+use std::task::{ready, Context, Poll};
 
 use arcref::ArcRef;
 use futures::future::try_join_all;
@@ -9,9 +9,9 @@ use futures::{Stream, StreamExt};
 use itertools::Itertools;
 use parking_lot::Mutex;
 use vortex_array::{ArrayContext, ToCanonical};
-use vortex_error::{VortexExpect as _, VortexResult, vortex_bail};
-use vortex_utils::aliases::DefaultHashBuilder;
+use vortex_error::{vortex_bail, VortexExpect as _, VortexResult};
 use vortex_utils::aliases::hash_set::HashSet;
+use vortex_utils::aliases::DefaultHashBuilder;
 
 use crate::layouts::struct_::StructLayout;
 use crate::segments::SequenceWriter;
@@ -100,7 +100,10 @@ impl LayoutStrategy for StructStrategy {
     }
 }
 
-fn transpose_stream<T, S>(stream: S, elements: usize) -> Vec<impl Stream<Item = VortexResult<T>>>
+pub fn transpose_stream<T, S>(
+    stream: S,
+    elements: usize,
+) -> Vec<impl Stream<Item = VortexResult<T>>>
 where
     S: Stream<Item = VortexResult<Vec<T>>> + Unpin,
     T: Unpin + 'static,
@@ -118,24 +121,24 @@ where
         .collect()
 }
 
-struct TransposeState<T, S>
+pub struct TransposeState<T, S>
 where
     S: Stream<Item = VortexResult<Vec<T>>> + Unpin,
     T: Unpin,
 {
-    upstream: S,
+    pub upstream: S,
     // TODO(os): make these buffers bounded so transposed streams can not run ahead unbounded
-    buffers: Vec<VecDeque<VortexResult<T>>>,
-    exhausted: bool,
+    pub buffers: Vec<VecDeque<VortexResult<T>>>,
+    pub exhausted: bool,
 }
 
-struct TransposedStream<T, S>
+pub struct TransposedStream<T, S>
 where
     S: Stream<Item = VortexResult<Vec<T>>> + Unpin,
     T: Unpin,
 {
-    index: usize,
-    state: Arc<Mutex<TransposeState<T, S>>>,
+    pub index: usize,
+    pub state: Arc<Mutex<TransposeState<T, S>>>,
 }
 
 impl<T, S> Stream for TransposedStream<T, S>
@@ -265,9 +268,7 @@ mod tests {
                 .sendable(),
             ),
         );
-        assert!(
-            format!("{}", res.unwrap_err())
-                .starts_with("Cannot push struct chunks with top level invalid values"),
-        )
+        assert!(format!("{}", res.unwrap_err())
+            .starts_with("Cannot push struct chunks with top level invalid values"),)
     }
 }

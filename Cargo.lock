@@ -3230,6 +3230,7 @@ version = "0.1.0"
 dependencies = [
  "arcref",
  "arrow",
+ "futures",
  "itertools 0.14.0",
  "parquet",
  "tokio",
