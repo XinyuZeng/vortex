@@ -1,0 +1,37 @@
+[package]
+name = "vortex-small-test"
+authors = { workspace = true }
+description = "Performance testing for Vortex and Parquet with small files vs large files"
+edition = { workspace = true }
+homepage = { workspace = true }
+include = { workspace = true }
+keywords = { workspace = true }
+license = { workspace = true }
+publish = false
+readme = "README.md"
+repository = { workspace = true }
+rust-version = { workspace = true }
+version = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+arrow-array = { workspace = true }
+arrow-schema = { workspace = true }
+async-trait = { workspace = true }
+bytes = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+futures = { workspace = true }
+itertools = { workspace = true }
+object_store = { workspace = true, features = ["fs"] }
+parquet = { workspace = true, features = ["async"] }
+rand = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+vortex = { workspace = true, features = ["tokio"] }
+vortex-io = { workspace = true, features = ["tokio"] }
