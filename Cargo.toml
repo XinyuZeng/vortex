@@ -26,6 +26,7 @@ members = [
     "vortex-python",
     "vortex-scan",
     "vortex-scalar",
+    "vortex-small-test",
     "vortex-tui",
     "vortex-utils",
     "xtask",

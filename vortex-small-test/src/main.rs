@@ -3,7 +3,6 @@
 
 use anyhow::Result;
 use clap::Parser;
-use tracing_subscriber;
 use vortex_small_test::{BenchmarkConfig, Scenario};
 
 #[derive(Parser, Debug)]
@@ -59,14 +58,40 @@ async fn main() -> Result<()> {
 
     if args.small_files {
         println!("\nRunning scenario 1: Many small files");
-        let result = vortex_small_test::benchmark::run_benchmark(&config, Scenario::ManySmallFiles).await?;
-        println!("Results: {:?}", result);
+        let result =
+            vortex_small_test::benchmark::run_benchmark(&config, Scenario::ManySmallFiles).await?;
+        for r in &result {
+            println!(
+                "  {} {} ({} files, {} rows): write={}ms, read={}ms, random_access={}ms, size={} bytes",
+                r.scenario,
+                r.format,
+                r.file_count,
+                r.total_rows,
+                r.write_time_ms,
+                r.read_time_ms,
+                r.random_access_time_ms.unwrap_or(0),
+                r.file_size_bytes
+            );
+        }
     }
 
     if args.large_file {
         println!("\nRunning scenario 2: Single large file");
-        let result = vortex_small_test::benchmark::run_benchmark(&config, Scenario::SingleLargeFile).await?;
-        println!("Results: {:?}", result);
+        let result =
+            vortex_small_test::benchmark::run_benchmark(&config, Scenario::SingleLargeFile).await?;
+        for r in &result {
+            println!(
+                "  {} {} ({} files, {} rows): write={}ms, read={}ms, random_access={}ms, size={} bytes",
+                r.scenario,
+                r.format,
+                r.file_count,
+                r.total_rows,
+                r.write_time_ms,
+                r.read_time_ms,
+                r.random_access_time_ms.unwrap_or(0),
+                r.file_size_bytes
+            );
+        }
     }
 
     if !args.small_files && !args.large_file {

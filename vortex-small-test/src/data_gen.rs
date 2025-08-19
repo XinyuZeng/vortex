@@ -20,6 +20,7 @@ pub fn test_schema() -> SchemaRef {
 }
 
 /// Generate a RecordBatch with random test data
+#[allow(clippy::expect_used)]
 pub fn generate_test_batch(size: usize) -> RecordBatch {
     let mut rng = rand::rng();
 
